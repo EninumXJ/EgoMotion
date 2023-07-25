@@ -1,1 +1,8 @@
 remy_2scenes.yml
+checkpoints/
+logs/
+model/features/
+*.png
+*.jpg
+*.pyc
+*.ipynb
