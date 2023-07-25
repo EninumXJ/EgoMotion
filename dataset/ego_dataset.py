@@ -43,23 +43,19 @@ class EgoDataset(torch.utils.data.Dataset):
         ind_bool = [index in i for i in self.length_list]
         # ind表示该index属于第ind个动作视频对
         ind = ind_bool.index(True)
-        print("ind: ", ind)
         pairs = self.pair_list[ind]
         for i in pairs.keys():
             action = i
-        print("action: ", action)
         pair = pairs[action]
         idx = index - self.length_list[ind][0]
         path_1 = os.path.join(action, str(pair[0]))
         path_2 = os.path.join(action, str(pair[1]))
         clip_1 = self._load_clip(path_1, idx)
         clip_2 = self._load_clip(path_2, idx)
-        return torch.stack((clip_1, clip_2), dim=0)
+        return action, torch.stack((clip_1, clip_2), dim=0)
 
     def _load_clip(self, path, index):
         video_directory = os.path.join(self.dataset_path, 'lab', path)
-        print("directory: ", video_directory)
-        print("index: ", index)
         images = []
         for i in range(index, index+self.clip_length):
             images.append(self._load_image(video_directory, i))
@@ -71,8 +67,8 @@ class EgoDataset(torch.utils.data.Dataset):
         return self.length_list[-1][1]
 
     def __getitem__(self, idx):
-        clip_pair = self._load_clip_pair(idx)
-        return clip_pair
+        action, clip_pair = self._load_clip_pair(idx)
+        return action, clip_pair
 
 
 if __name__=='__main__':
@@ -143,6 +139,6 @@ if __name__=='__main__':
                              )
     
     index = 177
-    pair_of_clip = ego_dataset[index]
-    print(pair_of_clip.shape)
+    action, pair_of_clip = ego_dataset[index]
+    print(action, pair_of_clip.shape)
     
