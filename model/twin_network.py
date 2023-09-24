@@ -123,7 +123,7 @@ class TwinNetwork(nn.Module):
 class R3D(nn.Module):
     def __init__(self,):
         super(R3D, self).__init__()
-        self.base_model = torchvision.models.video.r3d_18(pretrained=True)
+        self.base_model = torchvision.models.video.r3d_18(pretrained=False)
         self.base_model.fc = nn.Sequential()
         self.base_model.avgpool = nn.AdaptiveAvgPool3d(output_size=(2, 1, 1))
         self.fc = nn.Sequential(

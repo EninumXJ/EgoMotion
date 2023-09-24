@@ -5,8 +5,13 @@ import yaml
 from glob import glob
 from pathlib import Path
 from PIL import Image
+import numpy as np
+import joblib
+import sys
+sys.path.append('..')
+from util.bvh2pose import Bone_Addr_17joints, Switch_Position
 
-class EgoDataset(torch.utils.data.Dataset):
+class TwinDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_path, config_path, image_tmpl, transform=None, mode='train', clip_length=10):
         self.dataset_path = dataset_path
         with open(config_path, 'r') as f:
@@ -41,6 +46,7 @@ class EgoDataset(torch.utils.data.Dataset):
 
     def _load_clip_pair(self, index):
         ind_bool = [index in i for i in self.length_list]
+        print("length_list: ", self.length_list)
         # ind表示该index属于第ind个动作视频对
         ind = ind_bool.index(True)
         pairs = self.pair_list[ind]
@@ -62,7 +68,6 @@ class EgoDataset(torch.utils.data.Dataset):
         clip = torch.stack(images, 0)
         return clip
 
-
     def __len__(self):
         return self.length_list[-1][1]
 
@@ -70,9 +75,108 @@ class EgoDataset(torch.utils.data.Dataset):
         action, clip_pair = self._load_clip_pair(idx)
         return action, clip_pair
 
+class EgoMotionDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset_path, config_path, image_tmpl="{:04d}.jpg", transform=None, mode='train', clip_length=10):
+        self.dataset_path = dataset_path
+        with open(config_path, 'r') as f:
+            config = yaml.load(f.read(),Loader=yaml.FullLoader)
+        if mode == 'train':
+            self.action_list = config['train']
+        else:
+            self.action_list = config['test']
+        self.transform = transform
+        self.clip_length = clip_length
+        self.image_tmpl = image_tmpl
+        pose_path = os.path.join(self.dataset_path, 'egomotion_pose_30fps.p')
+        # pose_path = os.path.join(self.dataset_path, 'egomotion_pose.p')
+    
+        self.read_bodypose(pose_path)
+        self.preprocess(config)
+     
+    def read_bodypose(self, pose_path):
+        self.pose = joblib.load(pose_path)
+
+    def preprocess(self, config):
+        # length_list: 建立了索引到mocap数据的映射
+        # pair_list: 动作-视频对
+        self.action_index_range = []
+        self.action_video_num = {}
+        num_frames = 0; num = 0
+        for action in config["video_frames"]:
+            # action: '02_01_walk'
+            if config["video_frames"][action] == None:
+                continue
+            # self.action_video_num[action] = {}
+            for index in config["video_frames"][action]["lab"]:
+                # index: '1', '2', ...
+                video_frames = int(config["video_frames"][action]["lab"][index]) + 1  # important
+                act1, act2, _ = action.split("_",2)
+                act = act1 + '_' + act2
+                # print("act: ", act)
+                mocap_frames = self.pose[act]['trans'].shape[0]
+                # mocap_frames_2 = int(config["mocap_frames"][action])
+                # print("mocap_frames: ", mocap_frames)
+                # print("mocap_frames_2: ", mocap_frames_2)
+                frames = min(video_frames, mocap_frames) - 2*self.clip_length  # 去掉首尾2个clip
+                self.action_video_num[num] = (action, index)
+                self.action_index_range.append(range(num_frames, num_frames+frames))
+                num += 1
+                num_frames += frames
+        # print("action_index_range: ", self.action_index_range)
+        # print("action_video_num: ", self.action_video_num)
+
+    def _load_image(self, directory, index):
+        # print(self.image_tmpl)
+        # print(self.image_tmpl.format(index))
+        return self.transform(Image.open(os.path.join(directory, self.image_tmpl.format(index))).convert('RGB'))
+    
+    def _load_image_clip(self, directory, index):
+        images = []
+        for i in range(index, index+self.clip_length):
+            images.append(self._load_image(directory, i))
+        clip = torch.stack(images, 0)
+        return clip
+
+    def _load_mocap(self, action, index):
+        ### h36m pose: 17 joints
+        act1, act2, _ = action.split("_",2)
+        act = act1 + '_' + act2
+        # pose_former = self.pose[act]['trans'][index-1:index+self.clip_length-1]
+        # pose_present = self.pose[act]['trans'][index:index+self.clip_length]
+        # pose_gt = torch.tensor(pose_present - pose_former)
+        # print("pose_former: ", pose_former)
+        # print("pose_present: ", pose_present)
+        # print("pose_gt shape: ", pose_gt.shape)
+        pose = self.pose[act]['trans'][index:index+self.clip_length]
+        # print("pose shape: ", pose.shape)
+        pose = pose[:, Bone_Addr_17joints, :]
+        pose[:, 9, ...] = (pose[:, 11, ...] + pose[:, 12, ...]) / 2  ### compute chin position
+        # print("pose shape: ", pose.shape)
+        pose_gt = pose[:, Switch_Position, :]
+        pose_gt = pose_gt - pose_gt[0:1, 0:1, :]    ### 减去t0时刻root的坐标
+        return pose_gt
+
+    def __len__(self):
+        return self.action_index_range[-1][-1]
+
+    def __getitem__(self, index):
+        ### load img
+        ind_bool = [index in i for i in self.action_index_range]
+        # ind表示该index属于第ind个动作视频对
+        ind = ind_bool.index(True)
+        action, sub_dir = self.action_video_num[ind]
+        # print("action: ", action)
+        # print("sub_dir: ", sub_dir)
+        video_path = os.path.join(self.dataset_path, 'lab', action, str(sub_dir))
+        index_in_video = index - self.action_index_range[ind][0] + self.clip_length
+        index_in_mocap = index_in_video
+        img_clip = self._load_image_clip(video_path, index_in_video)
+        ### load mocap data
+        pose_gt = self._load_mocap(action, index_in_mocap)
+        return img_clip, pose_gt
 
 if __name__=='__main__':
-    config_path = '../remy_2scenes.yml'
+    config_path = '../data/EgoMotion/meta_remy.yml'
     # with open(config_path, encoding="utf-8") as f:
     #     config = yaml.load(f,Loader=yaml.FullLoader)
     # action_list = config['train']
@@ -132,13 +236,15 @@ if __name__=='__main__':
                                                 mean=[.485, .456, .406],
                                                 std=[.229, .224, .225])
                                             ])
-    ego_dataset = EgoDataset(dataset_path=dataset_path,
+    ego_dataset = EgoMotionDataset(dataset_path=dataset_path,
                              config_path=config_path,
                              image_tmpl=image_tmpl,
-                             transform=transforms
-                             )
-    
+                             transform=transforms,
+                             clip_length=10)
+    print(len(ego_dataset))
     index = 177
-    action, pair_of_clip = ego_dataset[index]
-    print(action, pair_of_clip.shape)
+    img, pose_gt = ego_dataset[index]
+    print(pose_gt)
+    print(img.shape)
+    # print(action, pair_of_clip.shape)
     

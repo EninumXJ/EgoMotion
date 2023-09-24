@@ -117,12 +117,15 @@ def test_plot(opt, transforms=None):
     clip_length = 10
     image_tmpl = '{:04d}.jpg'
     dataset_path = '/data/newhome/litianyi/dataset/EgoMotion/lab/'
-    action_list = {'02_01_walk': (2,48), '02_04_jump': (3,120), '02_06_bend': (3,95),
-                   '13_04_sit_on_stepstool': (3,66), '143_19_sit_and_getup': (5,84),
-                   '16_17_turn_left': (5,69), '16_19_turn_right': (5,56)}
+    # action_list = {'02_01_walk': (2,48), '02_04_jump': (3,120), '02_06_bend': (3,95),
+    #                '13_04_sit_on_stepstool': (3,66), '143_19_sit_and_getup': (5,84),
+    #                '16_17_turn_left': (5,69), '16_19_turn_right': (5,56)}
+    action_list = {'02_02_walk':(3,48), '02_04_jump': (3,120), '26_10_bend':(5,15),
+                   '13_06_sit_on_stepstool':(4,82), '75_19_medium_sit':(5,24),
+                   '16_18_turn_left':(5,72), '16_20_turn_right':(4,52)}
     clip_list = []
     label = ['walk', 'jump', 'bend', 'sit_down', 'sit_up', 'turn_left', 'turn_right']
-    num = [range(0,2), range(2,4), range(4,8), range(8,11), range(11,16), range(16,21), range(21,26)]
+    num = [range(0,3), range(3,6), range(6,11), range(11,15), range(15,20), range(20,25), range(25,29)]
     for action, tup in action_list.items():
         for i in range(1, tup[0]+1):
             image_path = os.path.join(dataset_path, action, str(i))
@@ -132,6 +135,7 @@ def test_plot(opt, transforms=None):
             clip = torch.stack(images, 0)
             clip_list.append(clip)
     mini_batch = torch.stack(clip_list, 0)
+    print(mini_batch.shape)
 
     model = R3D()
     if opt.gpus == '0':
@@ -146,16 +150,16 @@ def test_plot(opt, transforms=None):
         model.load_state_dict(checkpoint['state_dict'],strict=False)
     
     feature = model(mini_batch.cuda().permute(0,2,1,3,4)).detach().cpu().numpy()
-    tsne = TSNE(n_components=128, perplexity=5, method='exact')
-    # tsne = TSNE(n_components=2, perplexity=5, init='pca', random_state=0)
+    # tsne = TSNE(n_components=128, perplexity=5, method='exact')
+    tsne = TSNE(n_components=2, perplexity=5, init='pca', random_state=0)
     embedding = tsne.fit_transform(feature)
-    # plot_embedding(embedding, label, num, 'feature embedding')
-    plot_images(embedding[0], 'walk')
-    plot_images(embedding[2], 'jump')
-    plot_images(embedding[8], 'sit_down')
-    plot_images(embedding[11], 'sit_up')
-    plot_images(embedding[16], 'turn_left')
-    plot_images(embedding[21], 'turn_right')
+    plot_embedding(embedding, label, num, 'feature embedding')
+    # plot_images(embedding[0], 'walk')
+    # plot_images(embedding[2], 'jump')
+    # plot_images(embedding[8], 'sit_down')
+    # plot_images(embedding[11], 'sit_up')
+    # plot_images(embedding[16], 'turn_left')
+    # plot_images(embedding[21], 'turn_right')
 
 def plot_images(y, name):
     x = np.arange(0, 1024, 1)
@@ -167,11 +171,17 @@ def plot_images(y, name):
     plt.savefig('tests/'+name+".png")
   
 def plot_embedding(data, label, num_list, title):
+    print(data.shape)
     x_min, x_max = np.min(data, 0), np.max(data, 0)
     data = (data - x_min) / (x_max - x_min)
 
     fig = plt.figure()
-        
+    ax=plt.gca()  #gca:get current axis得到当前轴
+    #设置图片的右边框和上边框为不显示
+    ax.spines['right'].set_color('none')
+    ax.spines['top'].set_color('none')
+    ax.spines['left'].set_color('none')
+    ax.spines['bottom'].set_color('none')
     for i in range(data.shape[0]):
         ind_bool = [i in j for j in num_list]
         # ind表示该index属于第ind个动作视频对
@@ -183,7 +193,7 @@ def plot_embedding(data, label, num_list, title):
     plt.xticks([])
     plt.yticks([])
     plt.title(title)
-    plt.savefig('tests/'+"result.png")
+    plt.savefig('tests/'+"result6.png")
 
 if __name__=='__main__':
     opt = TestOptions().parse()

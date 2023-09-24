@@ -4,6 +4,7 @@ CUDA_VISIBLE_DEVICES=2,3 python train.py --gpus 0,1  \
                                          --n_epochs 30  \
                                          --train_size 5000  \
                                          --name twin_training06  \
+                                         --resume /home/litianyi/workspace/EgoMotion/checkpoints/twin_training06/rgb_checkpoint.pth  \
                                          --L1 100  \
                                          --L2 5  \
                                          --epsilon 15  \

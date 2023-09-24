@@ -1,8 +1,10 @@
 remy_2scenes.yml
 checkpoints/
 logs/
+data/
 model/features/
 *.png
 *.jpg
 *.pyc
 *.ipynb
+*.p
