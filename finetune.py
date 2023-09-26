@@ -12,7 +12,7 @@ from pathlib import Path
 ### Dataset and Model
 from model.twin_network import TwinNetwork, R3D
 from model.loss import *
-from model.proj import Projector
+from model.proj import Projector, Head
 from dataset.ego_dataset import EgoMotionDataset
 
 from MotionBERT.lib.model.loss import *
@@ -47,12 +47,13 @@ def set_random_seed(seed):
     np.random.seed(seed)
     torch.manual_seed(seed)
 
-def evaluate(args, twin_net, proj, model, val_loader):
+def evaluate(args, twin_net, head, model, proj, val_loader):
     print('INFO: Testing')
     results_all = []; gt_all = []
     twin_net.eval()
     proj.eval()
-    model.eval()            
+    model.eval()
+    head.eval()            
     with torch.no_grad():
         with tqdm(total=args.val_size) as pbar:
             for idx, (batch_input, batch_gt) in enumerate(val_loader):
@@ -61,8 +62,10 @@ def evaluate(args, twin_net, proj, model, val_loader):
                     batch_input = batch_input.cuda().permute(0,2,1,3,4)
                 
                 reprentation = twin_net(batch_input)
-                embeddings = proj(reprentation).reshape(N, -1, 17, 3)
-                predicted_3d_pos = model(embeddings)    # (N, T, 17, 3)
+                embeddings = head(reprentation).reshape(N, -1, 17, 3)
+                output = model(embeddings)    # (N, T, 17, 3)
+                output = output.reshape(-1, 17, 3)
+                predicted_3d_pos = proj(output.reshape(-1, 51)).reshape(N, -1, 17, 3)
 
                 results_all.append(predicted_3d_pos.cpu().numpy())
                 gt_all.append(batch_gt.cpu().numpy())
@@ -86,8 +89,8 @@ def evaluate(args, twin_net, proj, model, val_loader):
         pred = results_all[idx]
         
         # Root-relative Errors
-        pred = pred - pred[:,0:1,:]
-        gt = gt - gt[:,0:1,:]
+        # pred = pred - pred[:,0:1,:]
+        # gt = gt - gt[:,0:1,:]
         err1 = mpjpe(pred, gt)
         err2 = p_mpjpe(pred, gt)
         # print("err1: ", err1)
@@ -108,17 +111,18 @@ def evaluate(args, twin_net, proj, model, val_loader):
     summary_table.add_row(['P1'])
     summary_table.add_row(['P2'])
     print(summary_table)
-    e1 = np.mean(np.array(final_results_1)) * 100
-    e2 = np.mean(np.array(final_results_2)) * 100
+    e1 = np.mean(np.array(final_results_1)) * 1000
+    e2 = np.mean(np.array(final_results_2)) * 1000
     print('Protocol #1 Error (MPJPE):', e1, 'mm')
     print('Protocol #2 Error (P-MPJPE):', e2, 'mm')
     print('----------')
     return e1, e2, results_all
 
-def train_epoch(args, model_pos, twin_net, proj, train_loader, losses, optimizer):
+def train_epoch(args, twin_net, head, model_pos, proj, train_loader, losses, optimizer):
     model_pos.train()
     twin_net.train()
     proj.train()
+    head.train()
     with tqdm(total=len(train_loader)) as pbar:
         for idx, (batch_input, batch_gt) in enumerate(train_loader):
             batch_size = len(batch_input)
@@ -127,11 +131,13 @@ def train_epoch(args, model_pos, twin_net, proj, train_loader, losses, optimizer
                 batch_input = batch_input.cuda().permute(0,2,1,3,4)
                 batch_gt = batch_gt.cuda()
             # Predict 3D poses
-            reprentation = twin_net(batch_input)
-            embeddings = proj(reprentation).reshape(batch_size, -1, 17, 3)
+            representation = twin_net(batch_input)
+            embeddings = head(representation).reshape(batch_size, -1, 17, 3)
             # print("embedding shape: ", embeddings.shape)
             # (N, F, J, C) = (32, 10, 17, 3)
-            predicted_3d_pos = model_pos(embeddings)    # (N, T, 17, 3)
+            output = model_pos(embeddings)    # (N, T, 17, 3)
+            output = output.reshape(-1, 17, 3)
+            predicted_3d_pos = proj(output.reshape(-1, 51)).reshape(batch_size, -1, 17, 3)
             optimizer.zero_grad()
 
             loss_3d_pos = loss_mpjpe(predicted_3d_pos, batch_gt)
@@ -172,7 +178,8 @@ def train_with_config(args, opts, transforms):
                          config_path=args.config,
                          image_tmpl=args.image_tmpl,
                          transform=transforms,
-                         clip_length=args.clip_len)
+                         clip_length=args.clip_len,
+                         use_slam=False)
     
     train_dataset, val_dataset = random_split(egodata, [args.train_size, len(egodata) - args.train_size])
     train_loader = DataLoader(train_dataset,
@@ -188,7 +195,7 @@ def train_with_config(args, opts, transforms):
         os.makedirs(str(run_dir))
     if opts.use_wandb:
         wandb.init(
-            project="FinetuneOnMotionBERT",
+            project="Ego-Pose-Estimation",
             name=args.experiment_name,
             job_type="training",
             # hyperparameters
@@ -204,7 +211,8 @@ def train_with_config(args, opts, transforms):
     # -------------------------------------------------------------------
     # Load Checkpoint: TwinNetwork
     twin_net = R3D()
-    proj = Projector(256, 51*10)
+    head = Head(256, 51*30)
+    proj = Projector(17*3, 17*3)
     # Load Checkpoint: MotionBERT
     model_backbone = load_backbone(args)
     model_params = 0
@@ -215,28 +223,42 @@ def train_with_config(args, opts, transforms):
     if torch.cuda.is_available():
         model_backbone = nn.DataParallel(model_backbone)
         twin_net = nn.DataParallel(twin_net)
+        head = nn.DataParallel(head)
         proj = nn.DataParallel(proj)
         model_backbone = model_backbone.cuda()
         twin_net = twin_net.cuda()
+        head = head.cuda()
         proj = proj.cuda()
     
-    if opts.pretrained_mb or opts.evaluate:
-        chk_filename = opts.evaluate if opts.evaluate else opts.pretrained_mb
-        print('Loading MotionBERT checkpoint', chk_filename)
+    if not opts.resume:
+        if opts.pretrained_mb or opts.evaluate:
+            chk_filename = opts.evaluate if opts.evaluate else opts.pretrained_mb
+            print('Loading MotionBERT checkpoint', chk_filename)
+            checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
+            model_backbone.load_state_dict(checkpoint['model_pos'], strict=True)
+            model_pos = model_backbone
+        if opts.pretrained_twin or opts.evaluate:
+            chk_filename = opts.evaluate if opts.evaluate else opts.pretrained_twin
+            print('Loading TwinNetwork checkpoint', chk_filename)
+            checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
+            twin_net.load_state_dict(checkpoint['state_dict'], strict=True)
+        if opts.pretrained_proj or opts.evaluate:    
+            chk_filename = opts.evaluate if opts.evaluate else opts.pretrained_proj
+            print('Loading Projector checkpoint', chk_filename)
+            checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
+            twin_net.load_state_dict(checkpoint['state_dict'], strict=True)
+        st = 0
+        min_loss = 100000
+    else:
+        chk_filename = opts.resume
+        print("Loading resume", chk_filename)
         checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
-        model_backbone.load_state_dict(checkpoint['model_pos'], strict=True)
+        twin_net.load_state_dict(checkpoint['twin_net'], strict=True)
+        head.load_state_dict(checkpoint['head'], strict=True)
+        model_backbone.load_state_dict(checkpoint['backbone'], strict=True)
+        proj.load_state_dict(checkpoint['proj'], strict=True)
         model_pos = model_backbone
-    if opts.pretrained_twin or opts.evaluate:
-        chk_filename = opts.evaluate if opts.evaluate else opts.pretrained_twin
-        print('Loading TwinNetwork checkpoint', chk_filename)
-        checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
-        twin_net.load_state_dict(checkpoint['state_dict'], strict=True)
-    if opts.pretrained_proj or opts.evaluate:    
-        chk_filename = opts.evaluate if opts.evaluate else opts.pretrained_proj
-        print('Loading Projector checkpoint', chk_filename)
-        checkpoint = torch.load(chk_filename, map_location=lambda storage, loc: storage)
-        twin_net.load_state_dict(checkpoint['state_dict'], strict=True)
-    
+
     # -------------------------------------------------------------------
     # Model Training Settings
     # if args.partial_train:
@@ -247,7 +269,6 @@ def train_with_config(args, opts, transforms):
         optimizer = optim.AdamW([{"params": twin_net.parameters()}, {"params": proj.parameters()}],
                                  lr=lr, weight_decay=args.weight_decay)
         lr_decay = args.lr_decay
-        st = 0
         if opts.resume:
             st = checkpoint['epoch']
             if 'optimizer' in checkpoint and checkpoint['optimizer'] is not None:
@@ -257,7 +278,7 @@ def train_with_config(args, opts, transforms):
             lr = checkpoint['lr']
             if 'min_loss' in checkpoint and checkpoint['min_loss'] is not None:
                 min_loss = checkpoint['min_loss']
-        min_loss = 100000
+    
         # Training
         for epoch in range(st, args.epochs):
             print('Training epoch %d.' % epoch)
@@ -272,9 +293,8 @@ def train_with_config(args, opts, transforms):
             losses['3d_velocity'] = AverageMeter()
             losses['angle'] = AverageMeter()
             losses['angle_velocity'] = AverageMeter()
-            N = 0
-                        
-            train_epoch(args, model_pos=model_pos, twin_net=twin_net, proj=proj, train_loader=train_loader, losses=losses, optimizer=optimizer) 
+              
+            train_epoch(args, twin_net=twin_net, head=head, model_pos=model_pos, proj=proj, train_loader=train_loader, losses=losses, optimizer=optimizer) 
             elapsed = (time() - start_time) / 60
 
             if args.no_eval:
@@ -284,7 +304,7 @@ def train_with_config(args, opts, transforms):
                     lr,
                    losses['3d_pos'].avg))
             else:
-                e1, e2, results_all = evaluate(args, twin_net=twin_net, proj=proj, model=model_pos, val_loader=val_loader)
+                e1, e2, results_all = evaluate(args, twin_net=twin_net, head=head, model=model_pos, proj=proj, val_loader=val_loader)
                 print('[%d] time %.2f lr %f 3d_train %f e1 %f e2 %f' % (
                     epoch + 1,
                     elapsed,
@@ -318,7 +338,7 @@ def train_with_config(args, opts, transforms):
             chk_path = os.path.join(chk_dir, 'epoch_{}.bin'.format(epoch))
             chk_path_latest = os.path.join(chk_dir, 'latest_epoch.pth')
             chk_path_best = os.path.join(chk_dir, 'best_epoch.pth')
-            model = {'twin_net': twin_net, 'proj': proj, 'backbone':model_pos}
+            model = {'twin_net': twin_net, 'head': head, 'backbone':model_pos, 'proj': proj}
             save_checkpoint(chk_path_latest, epoch, lr, optimizer, model, min_loss)
             if (epoch + 1) % args.checkpoint_frequency == 0:
                 save_checkpoint(chk_path, epoch, lr, optimizer, model, min_loss)
@@ -336,8 +356,9 @@ def save_checkpoint(ckpt_path, epoch, lr, optimizer, model, min_loss):
         'lr': lr,
         'optimizer': optimizer.state_dict(),
         'twin_net': model['twin_net'].state_dict(),
-        'proj': model['proj'].state_dict(),
+        'head': model['head'].state_dict(),
         'backbone': model['backbone'].state_dict(),
+        'proj': model['proj'].state_dict(),
         'min_loss' : min_loss
     }, ckpt_path)
 

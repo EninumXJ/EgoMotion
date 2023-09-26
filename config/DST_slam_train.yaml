@@ -1,9 +1,8 @@
 # General  
-experiment_name: exp03 
+experiment_name: exp04 
 train_2d: False
 no_eval: False
 finetune: False
-partial_train: null
 
 # Traning 
 epochs: 20
@@ -26,7 +25,6 @@ att_fuse: True
 # Data
 data_root: data/EgoMotion/
 config: data/EgoMotion/meta_remy.yml
-image_tmpl: "{:04d}.jpg"
 train_size: 10000
 val_size: 100
 clip_len: 60
@@ -34,7 +32,7 @@ data_stride: 81
 rootrel: True
 sample_stride: 1
 num_joints: 17
-no_conf: False
+use_slam: True
 gt_2d: False
 
 # Loss
@@ -44,10 +42,3 @@ lambda_lv: 0.0
 lambda_lg: 0.0
 lambda_a: 0.0
 lambda_av: 0.0
-
-# Augmentation
-synthetic: False
-flip: False
-mask_ratio: 0.
-mask_T_ratio: 0.
-noise: False

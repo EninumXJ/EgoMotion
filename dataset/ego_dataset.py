@@ -76,7 +76,7 @@ class TwinDataset(torch.utils.data.Dataset):
         return action, clip_pair
 
 class EgoMotionDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, config_path, image_tmpl="{:04d}.jpg", transform=None, mode='train', clip_length=10):
+    def __init__(self, dataset_path, config_path, image_tmpl="{:04d}.jpg", transform=None, mode='train', clip_length=10, use_slam=True):
         self.dataset_path = dataset_path
         with open(config_path, 'r') as f:
             config = yaml.load(f.read(),Loader=yaml.FullLoader)
@@ -89,7 +89,9 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         self.image_tmpl = image_tmpl
         pose_path = os.path.join(self.dataset_path, 'egomotion_pose_30fps.p')
         # pose_path = os.path.join(self.dataset_path, 'egomotion_pose.p')
-    
+        # if use_slam then input slam results instead of images
+        self.use_slam = use_slam
+
         self.read_bodypose(pose_path)
         self.preprocess(config)
      
@@ -156,6 +158,17 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         pose_gt = pose_gt - pose_gt[0:1, 0:1, :]    ### 减去t0时刻root的坐标
         return pose_gt
 
+    def _load_slam_results(self, directory, index):
+        slam_results = torch.tensor(np.load(os.path.join(directory, 'feature_10frames.npy')))
+        return slam_results[index:index+self.clip_length] 
+
+    def sample(self, input, mocap, ratio=0.5):
+        new_num_frames = int(ratio * self.clip_length)
+        downsamp_inds = np.linspace(0, self.clip_length-1, num=new_num_frames, endpoint=False, dtype=int)
+        input_sample = input[downsamp_inds]
+        mocap_sample = mocap[downsamp_inds]
+        return input_sample, mocap_sample
+
     def __len__(self):
         return self.action_index_range[-1][-1]
 
@@ -168,12 +181,19 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         # print("action: ", action)
         # print("sub_dir: ", sub_dir)
         video_path = os.path.join(self.dataset_path, 'lab', action, str(sub_dir))
+        slam_results_path = os.path.join(self.dataset_path, 'features', action, 'lab', str(sub_dir))
         index_in_video = index - self.action_index_range[ind][0] + self.clip_length
         index_in_mocap = index_in_video
-        img_clip = self._load_image_clip(video_path, index_in_video)
-        ### load mocap data
         pose_gt = self._load_mocap(action, index_in_mocap)
-        return img_clip, pose_gt
+        if self.use_slam:
+            slam_features = self._load_slam_results(slam_results_path, index_in_video)
+            slam_clip, pose_gt = self.sample(slam_features, pose_gt)
+            return slam_clip, pose_gt
+        else:
+            img_clip = self._load_image_clip(video_path, index_in_video)
+            ### load mocap data
+            img_clip, pose_gt = self.sample(img_clip, pose_gt)
+            return img_clip, pose_gt
 
 if __name__=='__main__':
     config_path = '../data/EgoMotion/meta_remy.yml'
@@ -240,11 +260,11 @@ if __name__=='__main__':
                              config_path=config_path,
                              image_tmpl=image_tmpl,
                              transform=transforms,
-                             clip_length=10)
+                             clip_length=60)
     print(len(ego_dataset))
     index = 177
-    img, pose_gt = ego_dataset[index]
-    print(pose_gt)
-    print(img.shape)
+    slam, pose_gt = ego_dataset[index]
+    print(pose_gt.shape)
+    print(slam.shape)
     # print(action, pair_of_clip.shape)
     
