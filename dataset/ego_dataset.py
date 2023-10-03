@@ -9,7 +9,7 @@ import numpy as np
 import joblib
 import sys
 sys.path.append('..')
-from util.bvh2pose import Bone_Addr_17joints, Switch_Position
+from utils.bvh2pose import Bone_Addr_17joints, Switch_Position
 
 class TwinDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_path, config_path, image_tmpl, transform=None, mode='train', clip_length=10):
@@ -146,9 +146,6 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         # pose_former = self.pose[act]['trans'][index-1:index+self.clip_length-1]
         # pose_present = self.pose[act]['trans'][index:index+self.clip_length]
         # pose_gt = torch.tensor(pose_present - pose_former)
-        # print("pose_former: ", pose_former)
-        # print("pose_present: ", pose_present)
-        # print("pose_gt shape: ", pose_gt.shape)
         pose = self.pose[act]['trans'][index:index+self.clip_length]
         # print("pose shape: ", pose.shape)
         pose = pose[:, Bone_Addr_17joints, :]
@@ -162,12 +159,11 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         slam_results = torch.tensor(np.load(os.path.join(directory, 'feature_10frames.npy')))
         return slam_results[index:index+self.clip_length] 
 
-    def sample(self, input, mocap, ratio=0.5):
+    def sample(self, input, ratio=0.5):
         new_num_frames = int(ratio * self.clip_length)
         downsamp_inds = np.linspace(0, self.clip_length-1, num=new_num_frames, endpoint=False, dtype=int)
         input_sample = input[downsamp_inds]
-        mocap_sample = mocap[downsamp_inds]
-        return input_sample, mocap_sample
+        return input_sample
 
     def __len__(self):
         return self.action_index_range[-1][-1]
@@ -187,13 +183,16 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         pose_gt = self._load_mocap(action, index_in_mocap)
         if self.use_slam:
             slam_features = self._load_slam_results(slam_results_path, index_in_video)
-            slam_clip, pose_gt = self.sample(slam_features, pose_gt)
-            return slam_clip, pose_gt
-        else:
+            slam_clip = self.sample(slam_features)
+            pose_gt = self.sample(pose_gt)
             img_clip = self._load_image_clip(video_path, index_in_video)
-            ### load mocap data
-            img_clip, pose_gt = self.sample(img_clip, pose_gt)
-            return img_clip, pose_gt
+            img_clip = self.sample(img_clip)
+            return slam_clip, pose_gt, img_clip
+        # else:
+        #     img_clip = self._load_image_clip(video_path, index_in_video)
+        #     ### load mocap data
+        #     img_clip, pose_gt = self.sample(img_clip, pose_gt)
+        #     return img_clip, pose_gt
 
 if __name__=='__main__':
     config_path = '../data/EgoMotion/meta_remy.yml'

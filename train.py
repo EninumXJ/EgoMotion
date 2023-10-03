@@ -1,7 +1,7 @@
 from model.twin_network import TwinNetwork, R3D
 from dataset.ego_dataset import EgoDataset
-from util.transforms import *
-from util.utils import simp, norm
+from utils.transforms import *
+from utils.utils import simp, norm
 from options.twin_opt import TrainOptions
 from torch.nn.utils import clip_grad_norm
 from torchvision import transforms

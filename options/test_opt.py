@@ -1,7 +1,7 @@
 import argparse
 import os
 import torch
-from util import utils
+from utils import utils
 
 class TestOptions():
     """This class defines options used during both training and test time.

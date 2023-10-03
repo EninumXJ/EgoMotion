@@ -5,7 +5,7 @@ no_eval: False
 finetune: False
 
 # Traning 
-epochs: 20
+epochs: 50
 checkpoint_frequency: 10
 batch_size: 32 
 dropout: 0.0
@@ -25,9 +25,10 @@ att_fuse: True
 # Data
 data_root: data/EgoMotion/
 config: data/EgoMotion/meta_remy.yml
-train_size: 10000
-val_size: 100
-clip_len: 60
+image_tmpl: "{:04d}.jpg"
+train_size: 8000
+val_size: 50
+clip_len: 16
 data_stride: 81
 rootrel: True
 sample_stride: 1

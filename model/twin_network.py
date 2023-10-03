@@ -4,7 +4,7 @@ import numpy as np
 import torchvision
 import sys
 sys.path.append('..')
-from util.transforms import *
+from utils.transforms import *
 from torch.nn import functional as F
 
 class TwinNetwork(nn.Module):

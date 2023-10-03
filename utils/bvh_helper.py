@@ -1,4 +1,4 @@
-import util.bvh2np as BVHLIB
+import utils.bvh2np as BVHLIB
 import math
 import copy
 import numpy as np

@@ -8,3 +8,6 @@ model/features/
 *.pyc
 *.ipynb
 *.p
+facebook/
+vinvino02/
+AnimationTool/

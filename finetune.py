@@ -195,7 +195,7 @@ def train_with_config(args, opts, transforms):
         os.makedirs(str(run_dir))
     if opts.use_wandb:
         wandb.init(
-            project="Ego-Pose-Estimation",
+            project="FinetuneOnMotionBERT",
             name=args.experiment_name,
             job_type="training",
             # hyperparameters

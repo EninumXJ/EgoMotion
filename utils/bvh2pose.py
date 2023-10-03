@@ -1,4 +1,4 @@
-from util.bvh2np import Bvh
+from utils.bvh2np import Bvh
 import sys
 from glob import glob
 import os

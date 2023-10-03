@@ -6,36 +6,42 @@ from model.twin_network import TwinNetwork, R3D
 from model.loss import *
 from model.proj import Projector
 from dataset.ego_dataset import EgoMotionDataset
-from MotionBERT.lib.model.DSTformer import DSTformer
+from model.timesformer.models.vit import TimeSformer
+from transformers import GLPNFeatureExtractor, GLPNForDepthEstimation
 from MotionBERT.lib.utils.tools import *
 from functools import partial
+from train_on_slam import depth_estimate
+import joblib
 
 if __name__=='__main__':
-    config_path = 'config/MB_twin_network_finetune.yaml'
+    config_path = 'config/DST_slam_train.yaml'
     args = get_config(config_path)
-    checkpoints_path = '/home/litianyi/workspace/EgoMotion/checkpoints/exp01/best_epoch.pth'
-    twin_net = R3D()
-    proj = Projector(256, 51*10)
-    model_backbone = DSTformer(dim_in=3, dim_out=3, dim_feat=args.dim_feat, dim_rep=args.dim_rep, 
-                                   depth=args.depth, num_heads=args.num_heads, mlp_ratio=args.mlp_ratio, norm_layer=partial(nn.LayerNorm, eps=1e-6), 
-                                   maxlen=args.maxlen, num_joints=args.num_joints)
+    checkpoints_path = "/data/newhome/litianyi/model/EgoMotion/checkpoints/exp04/best_epoch.pth"
+    dataset_path = '/data/newhome/litianyi/dataset/EgoMotion/'
+    pose_path = os.path.join(dataset_path, 'egomotion_pose_30fps.p')
+    pose = joblib.load(pose_path)
+    pose_walk = pose['02_01']['trans'][10:11] * 0.0564
+    print("pose: ", pose_walk)
+     # Model
+    model = TimeSformer(img_size=224, num_classes=224, num_frames=8, 
+                        attention_type='divided_space_time', 
+                        pretrained_model='/data/newhome/litianyi/model/TimeSformer/TimeSformer_divST_8x32_224_K600.pyth')
+    feature_extractor = GLPNFeatureExtractor.from_pretrained("vinvino02/glpn-nyu")
+    backbone = GLPNForDepthEstimation.from_pretrained("vinvino02/glpn-nyu")
+    # projector
+    proj = Projector(224, 17*3*8, 512)
     if torch.cuda.is_available():
-        model_backbone = nn.DataParallel(model_backbone)
-        twin_net = nn.DataParallel(twin_net)
+        model_backbone = nn.DataParallel(model)
         proj = nn.DataParallel(proj)
         model_backbone = model_backbone.cuda()
-        twin_net = twin_net.cuda()
         proj = proj.cuda()
     checkpoint = torch.load(checkpoints_path, map_location=lambda storage, loc: storage)
     model_backbone.load_state_dict(checkpoint['backbone'], strict=True)
-    twin_net.load_state_dict(checkpoint['twin_net'], strict=True)
     proj.load_state_dict(checkpoint['proj'], strict=True)
 
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
     img_transforms = transforms.Compose([
-                    transforms.Resize((256,256)),
-                    transforms.ToTensor(),
-                    normalize])
+                    transforms.Resize((224,224)),
+                    transforms.ToTensor()])
 
     egodata = EgoMotionDataset(dataset_path=args.data_root,
                          config_path=args.config,
@@ -45,17 +51,24 @@ if __name__=='__main__':
     # test_loader = DataLoader(egodata,
     #                           batch_size=1, shuffle=True,
     #                           num_workers=4, pin_memory=False)
-    input, gt = egodata[20]
-    input = torch.tensor(input).cuda().unsqueeze(0).permute(0,2,1,3,4)
-    gt = torch.tensor(gt).cuda().unsqueeze(0)
-    print("input: ", input)
-    print("ground truth: ", gt)
-    representation = twin_net(input)
-    print("represent: ", representation)
-    embeddings = proj(representation).reshape(1, -1, 17, 3)
-    print("embedding: ", embeddings)
-    output = model_backbone(embeddings)
-    print("output: ", output)
-    pred = output.detach().cpu().numpy()
-    gt = gt.detach().cpu().numpy()
-    print("err1: ", mpjpe(pred, gt)*100)
+    _, batch_gt, batch_input = egodata[20]
+    N = 1
+    C = 8
+    # print("input shape: ", batch_input.shape)
+    if torch.cuda.is_available():
+        batch_input = torch.tensor(batch_input).cuda().reshape(-1, 3, 224, 224)
+        batch_gt = torch.tensor(batch_gt).cuda()
+        
+    # predict depth
+    with torch.no_grad():
+        depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
+    depth = depth.reshape(N, C, 1, 224, 224)
+    # Predict 3D poses
+    inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
+    embeddings = model_backbone(inputs)
+    # (N, F, J, C) = (32, 10, 17, 3)
+    predicted_3d_pos = proj(embeddings).reshape(N, -1, 17, 3)    # (N, T, 17, 3)
+    print(predicted_3d_pos.shape)
+    print("predict 3d pose[0]: ", predicted_3d_pos[0][0])
+    print("predict 3d pose[7]: ", predicted_3d_pos[0][7])
+    print("ground truth 3d pose", batch_gt[0] * 0.0564)

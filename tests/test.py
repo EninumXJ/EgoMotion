@@ -3,8 +3,8 @@ sys.path.append("/home/litianyi/workspace/EgoMotion")
 from model.twin_network import TwinNetwork, R3D
 from dataset.ego_dataset import EgoDataset
 from torch import tensor
-from util.transforms import *
-from util.utils import simp, norm
+from utils.transforms import *
+from utils.utils import simp, norm
 from options.test_opt import TestOptions
 from torch.nn.utils import clip_grad_norm
 from torchvision import transforms
