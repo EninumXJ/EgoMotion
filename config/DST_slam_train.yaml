@@ -1,5 +1,5 @@
 # General  
-experiment_name: exp04 
+experiment_name: exp05 
 train_2d: False
 no_eval: False
 finetune: False
@@ -26,8 +26,8 @@ att_fuse: True
 data_root: data/EgoMotion/
 config: data/EgoMotion/meta_remy.yml
 image_tmpl: "{:04d}.jpg"
-train_size: 8000
-val_size: 50
+train_size: 10000
+val_size: 3000
 clip_len: 16
 data_stride: 81
 rootrel: True

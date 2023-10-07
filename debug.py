@@ -11,6 +11,7 @@ from transformers import GLPNFeatureExtractor, GLPNForDepthEstimation
 from MotionBERT.lib.utils.tools import *
 from functools import partial
 from train_on_slam import depth_estimate
+from utils.pose2bvh import write_standard_bvh
 import joblib
 
 if __name__=='__main__':
@@ -60,15 +61,38 @@ if __name__=='__main__':
         batch_gt = torch.tensor(batch_gt).cuda()
         
     # predict depth
-    with torch.no_grad():
-        depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
-    depth = depth.reshape(N, C, 1, 224, 224)
-    # Predict 3D poses
-    inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
-    embeddings = model_backbone(inputs)
-    # (N, F, J, C) = (32, 10, 17, 3)
-    predicted_3d_pos = proj(embeddings).reshape(N, -1, 17, 3)    # (N, T, 17, 3)
-    print(predicted_3d_pos.shape)
-    print("predict 3d pose[0]: ", predicted_3d_pos[0][0])
-    print("predict 3d pose[7]: ", predicted_3d_pos[0][7])
-    print("ground truth 3d pose", batch_gt[0] * 0.0564)
+    # with torch.no_grad():
+    #     depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
+    #     depth = depth.reshape(N, C, 1, 224, 224)
+    #     print("depth: ", depth[0][0][0])
+    #     # Predict 3D poses
+    #     inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
+    #     embeddings = model_backbone(inputs)
+    #     # (N, F, J, C) = (32, 10, 17, 3)
+    #     predicted_3d_pos = proj(embeddings).reshape(N, -1, 17, 3)    # (N, T, 17, 3)
+    #     # print(predicted_3d_pos.shape)
+    #     # print("predict 3d pose[0]: ", predicted_3d_pos[0][0])
+    #     # print("predict 3d pose[7]: ", predicted_3d_pos[0][7])
+    #     # print("ground truth 3d pose", batch_gt[0])
+    #     predicted_3d_pos_0 = predicted_3d_pos[0].cpu().numpy()
+    #     print("3d pos shape: ", predicted_3d_pos_0.shape)
+    #     index = [0, 1, 2, 3, 4, 5, 6, 7, 9, 8, 10,
+    #              11, 12, 13, 14, 15, 16]
+    #     predicted_3d_pos_0 = predicted_3d_pos_0[:, index, :]
+    #     file_path = "predict_3d_pos.bvh"
+    #     write_standard_bvh(file_path, predicted_3d_pos_0)
+
+    ### ground truth debug
+    motion_path = "data/EgoMotion/egomotion_pose_30fps.p"
+    motion = joblib.load(motion_path)
+    pose_gt = motion['02_01']['trans'][0:8]
+    index1 = [0, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20]
+    pose_ = pose_gt[:, index1, :]
+    pose_[:, 9, ...] = (pose_[:, 11, ...] + pose_[:, 12, ...]) / 2
+    index2 = [0, 4, 5, 6, 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+    pose = pose_[:, index2, :]
+    # print("pose: ", pose)
+    print("pose_gt shape: ", pose.shape)
+    print(motion['02_01'].keys())
+    file_path = "predict_3d_pos/gt"
+    write_standard_bvh(file_path, pose)

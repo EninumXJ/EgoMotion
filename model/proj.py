@@ -33,7 +33,7 @@ class Projector(nn.Module):
        
         self.fc2 = nn.Sequential(
             nn.Linear(hidden_channels, output_channels),
-            nn.ReLU()
+            # nn.ReLU()
         )
 
     def forward(self, input):

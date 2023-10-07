@@ -91,7 +91,6 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         # pose_path = os.path.join(self.dataset_path, 'egomotion_pose.p')
         # if use_slam then input slam results instead of images
         self.use_slam = use_slam
-
         self.read_bodypose(pose_path)
         self.preprocess(config)
      
@@ -104,7 +103,7 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         self.action_index_range = []
         self.action_video_num = {}
         num_frames = 0; num = 0
-        for action in config["video_frames"]:
+        for action in self.action_list:
             # action: '02_01_walk'
             if config["video_frames"][action] == None:
                 continue
@@ -116,6 +115,7 @@ class EgoMotionDataset(torch.utils.data.Dataset):
                 act = act1 + '_' + act2
                 # print("act: ", act)
                 mocap_frames = self.pose[act]['trans'].shape[0]
+                # print("{0} mocap frames: {1}".format(action, mocap_frames))
                 # mocap_frames_2 = int(config["mocap_frames"][action])
                 # print("mocap_frames: ", mocap_frames)
                 # print("mocap_frames_2: ", mocap_frames_2)
@@ -170,6 +170,7 @@ class EgoMotionDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index):
         ### load img
+        # print(self.action_index_range)
         ind_bool = [index in i for i in self.action_index_range]
         # ind表示该index属于第ind个动作视频对
         ind = ind_bool.index(True)
@@ -259,7 +260,7 @@ if __name__=='__main__':
                              config_path=config_path,
                              image_tmpl=image_tmpl,
                              transform=transforms,
-                             clip_length=60)
+                             clip_length=16)
     print(len(ego_dataset))
     index = 177
     slam, pose_gt = ego_dataset[index]

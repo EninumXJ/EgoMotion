@@ -65,8 +65,8 @@ def evaluate(args, feature_extractor, backbone, model, proj, val_loader):
                 gt_all.append(batch_gt.cpu().numpy())
                 if idx % 10 == 0:
                     pbar.update(10)
-                if idx > args.val_size:
-                    break
+                # if idx > args.val_size:
+                #     break
     
     gt_all = np.concatenate(gt_all)
     results_all = np.concatenate(results_all)
@@ -131,7 +131,7 @@ def depth_estimate(image, feature_extractor, model):
     MMAX, _ = torch.max(predicted_depth, dim=2, keepdim=True)
     MAX, _ = torch.max(MMAX, dim=1, keepdim=True)
     # print("max shape: ", MAX.shape)
-    predicted_depth_norm = predicted_depth / MAX
+    predicted_depth_norm = predicted_depth / (MAX + 0.0001)
     # visualize the prediction
     # output = predicted_depth.squeeze().cpu().numpy()
     # formatted = (output * 255 / np.max(output)).astype("uint8")
@@ -167,7 +167,7 @@ def train_epoch(args, feature_extractor, backbone, model, proj, train_loader, lo
             loss_lg = loss_limb_gt(predicted_3d_pos, batch_gt)
             loss_a = loss_angle(predicted_3d_pos, batch_gt)
             loss_av = loss_angle_velocity(predicted_3d_pos, batch_gt)
-            loss_total = loss_3d_pos * 10 + \
+            loss_total = loss_3d_pos * 2 + \
                             args.lambda_scale       * loss_3d_scale + \
                             args.lambda_3d_velocity * loss_3d_velocity + \
                             args.lambda_lv          * loss_lv + \
@@ -283,14 +283,24 @@ def main(args, opts):
     img_transforms = transforms.Compose([
                     transforms.Resize((224,224)),
                     transforms.ToTensor()])
-    egodata = EgoMotionDataset(dataset_path=args.data_root,
+    train_data = EgoMotionDataset(dataset_path=args.data_root,
                          config_path=args.config,
                          image_tmpl=args.image_tmpl,
                          transform=img_transforms,
                          clip_length=args.clip_len,
+                         mode='train',
+                         use_slam=True)
+    test_data = EgoMotionDataset(dataset_path=args.data_root,
+                         config_path=args.config,
+                         image_tmpl=args.image_tmpl,
+                         transform=img_transforms,
+                         clip_length=args.clip_len,
+                         mode='test',
                          use_slam=True)
     
-    train_dataset, val_dataset = random_split(egodata, [args.train_size, len(egodata) - args.train_size])
+    train_dataset, _ = random_split(train_data, [args.train_size, len(train_data) - args.train_size])
+    test_dataset, _ = random_split(test_data, [args.val_size, len(test_data) - args.val_size])
+    val_dataset = test_dataset
     train_loader = DataLoader(train_dataset,
                               batch_size=args.batch_size, shuffle=True,
                               num_workers=4, pin_memory=False)
@@ -324,7 +334,7 @@ def main(args, opts):
                         pretrained_model='/data/newhome/litianyi/model/TimeSformer/TimeSformer_divST_8x32_224_K600.pyth')
     
     # projector
-    proj = Projector(224, 17*3*int(args.clip_len/2), 512)
+    proj = Projector(224, 17*3*8, 512)
     model_params = 0
     for parameter in model.parameters():
         model_params = model_params + parameter.numel()
