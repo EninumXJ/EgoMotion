@@ -13,6 +13,8 @@ Bone_name_list = ['Hips', 'LHipJoint', 'LeftUpLeg', 'LeftLeg', 'LeftFoot', 'RHip
 Bone_Addr = [0, 1, 2, 3, 4, 7, 8, 9, 10, 14, 15, 16, 18, 20, 21, 22, 23, 29, 30, 31, 32]
 Bone_Addr_17joints = [0, 2, 3, 4, 6, 7, 8, 10, 11, 9, 12, 14, 15, 16, 18, 19, 20]
 # hips, Lupleg, Lleg, Lfoot, Rupleg, Rleg, Rfoot, Spine1, Neck, chin, head, Larm, Lforearm, Lhand, Rarm, Rforearm, Rhand
+Bone_Addr_17joints_new = [0, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 14, 15, 16, 18, 19, 20]
+# hips, Lupleg, Lleg, Lfoot, Rupleg, Rleg, Rfoot, Spine, Spine1, Neck, head, Larm, Lforearm, Lhand, Rarm, Rforearm, Rhand
 Switch_Position = [0, 4, 5, 6, 1, 2, 3, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
 def convert_bvh(mocap_path, output_path, fps=30):

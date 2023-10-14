@@ -1,0 +1,175 @@
+import os
+import torch
+import torch.utils.data
+import yaml
+from glob import glob
+from pathlib import Path
+from PIL import Image
+import numpy as np
+import joblib
+import pytorch3d.transforms as transforms 
+import sys
+sys.path.append('..')
+
+SMPLH_PATH = "/home/litianyi/workspace/egoego_release/smpl_models/smplh_amass/"
+
+def get_smpl_parents():
+    bm_path = os.path.join(SMPLH_PATH, 'male/model.npz')
+    npz_data = np.load(bm_path)
+    ori_kintree_table = npz_data['kintree_table'] # 2 X 52 
+    parents = ori_kintree_table[0, :22] # 22 
+    parents[0] = -1 # Assign -1 for the root joint's parent idx.
+
+    return parents
+
+class KinPolyDataset(torch.utils.data.Dataset):
+    def __init__(self, dataset_path, config_path, image_tmpl="{:05d}.jpg",
+                 transform=None, clip_length=10, mode='train'):
+        self.dataset_path = dataset_path
+        with open(config_path, 'r') as f:
+            config = yaml.load(f.read(),Loader=yaml.FullLoader)
+        if mode == 'train':
+            self.action_list = config['train']
+        elif mode == 'test':
+            self.action_list = config['test']
+        self.clip_length = clip_length
+        mocap_path = os.path.join(self.dataset_path, 'mocap_annotations.p')
+        self.mocap_data = joblib.load(mocap_path)
+        self.transform = transform
+        self.image_tmpl = image_tmpl
+        self.preprocess(config)
+
+    def preprocess(self, config):
+        # length_list: 建立了索引到mocap数据的映射
+        # pair_list: 动作-视频对
+        self.action_index_range = []
+        self.action_video_num = {}
+        num_frames = 0; num = 0
+        for action in self.action_list:
+            # action: '02_01_walk'
+            if config["video_mocap_sync"][action] == None:
+                continue
+            # self.action_video_num[action] = {}
+            # index: '1', '2', ...
+            mocap_frames = int(config["video_mocap_sync"][action][2] - config["video_mocap_sync"][action][1])
+            # print("{0} mocap frames: {1}".format(action, mocap_frames))
+            # mocap_frames_2 = int(config["mocap_frames"][action])
+            # print("mocap_frames: ", mocap_frames)
+            # print("mocap_frames_2: ", mocap_frames_2)
+            useful_frames = mocap_frames - 2*self.clip_length  # 去掉首尾2个clip
+            mocap_video_gap = int(config["video_mocap_sync"][action][0])
+            mocap_start_frame = int(config["video_mocap_sync"][action][1])
+            mocap_end_frame = int(config["video_mocap_sync"][action][2])
+            self.action_video_num[num] = (action, mocap_video_gap, mocap_start_frame, mocap_end_frame)
+            self.action_index_range.append(range(num_frames, num_frames+useful_frames))
+            num += 1
+            num_frames += useful_frames
+
+    def _load_image(self, directory, index):
+        return self.transform(Image.open(os.path.join(directory, self.image_tmpl.format(index))).convert('RGB'))
+
+    def _load_image_clip(self, directory, index):
+        images = []
+        for i in range(index, index+self.clip_length):
+            images.append(self._load_image(directory, i))
+        clip = torch.stack(images, 0)
+        return clip
+
+    def _load_mocap(self, action, index):
+        ### kinpoly pose: 23 joints + 1 root
+        print("index: ", index)
+        print("mocap frames: ", self.mocap_data[action]['qpos'].shape)
+        joint_rot = self.mocap_data[action]['qpos'][index:index+self.clip_length, 7:]
+        print("joint_rot shape: ", joint_rot.shape)
+        root = self.mocap_data[action]['qpos'][index:index+self.clip_length][:7]
+        joint_rot = torch.from_numpy(joint_rot.reshape(self.clip_length, -1, 3))   # TxJx3
+        print("joint_rot shape: ", joint_rot.shape)
+        # euler angle: (Z Y X) -> (X Y Z)
+        # joint_rot = joint_rot[:,:,[2,1,0]]
+        lrot_quat_status = transforms.matrix_to_quaternion(transforms.euler_angles_to_matrix(joint_rot, convention='ZYX'))   ## TxJx4
+        print("lrot_quat_status shape: ", lrot_quat_status.shape)
+        lrot_quat = transforms.quaternion_multiply(lrot_quat_status[1:, ...], 
+                                                   transforms.quaternion_invert(lrot_quat_status[:-1, ...]))
+        print("lrot_quat shape: ", lrot_quat.shape)
+        ## lrot_quat表征该时刻的旋转相对于上一时刻的旋转量：以四元数表示
+        
+        zero = torch.zeros_like(lrot_quat[0:1,...])
+        lrot_gt = torch.cat([zero, lrot_quat], dim=0)
+
+        initial_rot = None
+
+        return lrot_gt, root, initial_rot
+
+    def sample(self, input, ratio=0.5, mode='add'):
+        new_num_frames = int(ratio * self.clip_length)
+        downsamp_inds = np.linspace(0, self.clip_length, num=new_num_frames, endpoint=False, dtype=int)
+
+        if mode == 'add':
+            input_sample = input[downsamp_inds]
+            downsamp_inds_odd = np.linspace(1, self.clip_length+1, num=new_num_frames, endpoint=False, dtype=int)
+            input_sample_2 = input[downsamp_inds_odd]
+            input_sample[1:] = transforms.quaternion_multiply(input_sample_2[:-1], input_sample[1:])
+        elif mode == 'sample':
+            input_sample = input[downsamp_inds]
+        return input_sample
+
+    def __len__(self):
+        return self.action_index_range[-1][-1]
+    
+    def __getitem__(self, index):
+        ind_bool = [index in i for i in self.action_index_range]
+        # ind表示该index属于第ind个动作视频对
+        ind = ind_bool.index(True)
+        
+        action, mocap_video_gap, mocap_start_frame, mocap_end_frame = self.action_video_num[ind]
+        _, name = action.split('-', 1)
+        video_path = os.path.join(self.dataset_path, 'images', name)
+        index_in_video = index - self.action_index_range[ind][0] + mocap_start_frame + mocap_video_gap + self.clip_length
+        index_in_mocap = index - self.action_index_range[ind][0] + self.clip_length  ###这里不需要加上start_frame，因为.p文件中已经将相应的mocap片段裁剪好了
+        lrot_gt, root, _ = self._load_mocap(action, index_in_mocap)
+        img_clip = self._load_image_clip(video_path, index_in_video)
+        return lrot_gt, img_clip
+    
+    def fk_smpl(self, root_trans, lrot_aa):
+        # root_trans: N X 3 
+        # lrot_aa: N X J X 3 
+
+        # lrot: N X J X 3 X 3 (local rotation with reprect to its parent joint)
+        # lpos: N X J X 3 (root joint is in global space, the other joints are offsets relative to its parent in rest pose)
+        
+        parents = get_smpl_parents() 
+
+        lrot_mat = transforms.axis_angle_to_matrix(lrot_aa) # N X J X 3 X 3 
+
+        lrot = transforms.matrix_to_quaternion(lrot_mat)
+
+        # Generate global joint position 
+        lpos = self.rest_human_offsets.repeat(lrot_mat.shape[0], 1, 1) # T' X 22 X 3 
+
+        gp, gr = [lpos[..., :1, :]], [lrot[..., :1, :]]
+        for i in range(1, len(parents)):
+            gp.append(
+                transforms.quaternion_apply(gr[parents[i]], lpos[..., i : i + 1, :]) + gp[parents[i]]
+            )
+            gr.append(transforms.quaternion_multiply(gr[parents[i]], lrot[..., i : i + 1, :]))
+
+        global_rot = torch.cat(gr, dim=-2) # T X 22 X 4 
+        global_jpos = torch.cat(gp, dim=-2) # T X 22 X 3 
+
+        global_jpos += root_trans[:, None, :] # T X 22 X 3
+
+        return global_rot, global_jpos 
+
+
+if __name__=='__main__':
+    config_path = '/data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/mocap_meta.yml'
+    dataset_path = '/data/newhome/litianyi/dataset/kin_poly/MoCap_dataset'
+    import torchvision
+    img_transforms = torchvision.transforms.Compose([
+                    torchvision.transforms.Resize((224,224)),
+                    torchvision.transforms.ToTensor()])
+    kinpolydata = KinPolyDataset(dataset_path=dataset_path, config_path=config_path, clip_length=16, transform=img_transforms)
+    index = 177
+    lrot_gt, img_clip = kinpolydata[index]
+    print(lrot_gt.shape)
+    print(img_clip.shape)

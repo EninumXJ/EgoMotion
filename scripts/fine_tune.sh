@@ -5,7 +5,7 @@
 #                           --use_wandb  \
 
 CUDA_VISIBLE_DEVICES=1,2  python train_on_slam.py  --config config/DST_slam_train.yaml  \
-                                                    --use_wandb  \
-                                                    -c  /data/newhome/litianyi/model/EgoMotion/checkpoints/  \
-                                                    --resume  /data/newhome/litianyi/model/EgoMotion/checkpoints/exp04/best_epoch.pth  \
+                                                   --use_wandb  \
+                                                   -c  /data/newhome/litianyi/model/EgoMotion/checkpoints/  \
+                                                    # --resume  /data/newhome/litianyi/model/EgoMotion/checkpoints/exp05/best_epoch.pth  \
                                                     

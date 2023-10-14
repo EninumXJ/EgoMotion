@@ -9,7 +9,7 @@ import numpy as np
 import joblib
 import sys
 sys.path.append('..')
-from utils.bvh2pose import Bone_Addr_17joints, Switch_Position
+from utils.bvh2pose import Bone_Addr_17joints, Bone_Addr_17joints_new, Switch_Position
 
 class TwinDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_path, config_path, image_tmpl, transform=None, mode='train', clip_length=10):
@@ -76,7 +76,7 @@ class TwinDataset(torch.utils.data.Dataset):
         return action, clip_pair
 
 class EgoMotionDataset(torch.utils.data.Dataset):
-    def __init__(self, dataset_path, config_path, image_tmpl="{:04d}.jpg", transform=None, mode='train', clip_length=10, use_slam=True):
+    def __init__(self, dataset_path, config_path, image_tmpl="{:04d}.jpg", transform=None, mode='train', clip_length=10, use_slam=True, pose='position'):
         self.dataset_path = dataset_path
         with open(config_path, 'r') as f:
             config = yaml.load(f.read(),Loader=yaml.FullLoader)
@@ -88,10 +88,15 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         self.clip_length = clip_length
         self.image_tmpl = image_tmpl
         pose_path = os.path.join(self.dataset_path, 'egomotion_pose_30fps.p')
+        body_motion_path = os.path.join(self.dataset_path, 'body_motion_30fps.p')
         # pose_path = os.path.join(self.dataset_path, 'egomotion_pose.p')
         # if use_slam then input slam results instead of images
         self.use_slam = use_slam
-        self.read_bodypose(pose_path)
+        self.pose_represent = pose
+        if self.pose_represent == 'position':
+            self.read_bodypose(pose_path)
+        elif self.pose_represent == 'rotation':
+            self.read_bodypose(body_motion_path)
         self.preprocess(config)
      
     def read_bodypose(self, pose_path):
@@ -114,7 +119,10 @@ class EgoMotionDataset(torch.utils.data.Dataset):
                 act1, act2, _ = action.split("_",2)
                 act = act1 + '_' + act2
                 # print("act: ", act)
-                mocap_frames = self.pose[act]['trans'].shape[0]
+                if self.pose_represent == 'position':
+                    mocap_frames = self.pose[act]['trans'].shape[0]
+                elif self.pose_represent == 'rotation':
+                    mocap_frames = self.pose[act].shape[0]
                 # print("{0} mocap frames: {1}".format(action, mocap_frames))
                 # mocap_frames_2 = int(config["mocap_frames"][action])
                 # print("mocap_frames: ", mocap_frames)
@@ -143,26 +151,41 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         ### h36m pose: 17 joints
         act1, act2, _ = action.split("_",2)
         act = act1 + '_' + act2
-        # pose_former = self.pose[act]['trans'][index-1:index+self.clip_length-1]
-        # pose_present = self.pose[act]['trans'][index:index+self.clip_length]
-        # pose_gt = torch.tensor(pose_present - pose_former)
-        pose = self.pose[act]['trans'][index:index+self.clip_length]
-        # print("pose shape: ", pose.shape)
-        pose = pose[:, Bone_Addr_17joints, :]
-        pose[:, 9, ...] = (pose[:, 11, ...] + pose[:, 12, ...]) / 2  ### compute chin position
-        # print("pose shape: ", pose.shape)
-        pose_gt = pose[:, Switch_Position, :]
-        pose_gt = pose_gt - pose_gt[0:1, 0:1, :]    ### 减去t0时刻root的坐标
+        if self.pose_represent == 'position':
+            pose = self.pose[act]['trans'][index:index+self.clip_length]
+            # print("pose shape: ", pose.shape)
+            pose = pose[:, Bone_Addr_17joints, :]
+            pose[:, 9, ...] = (pose[:, 11, ...] + pose[:, 12, ...]) / 2  ### compute chin position
+            # print("pose shape: ", pose.shape)
+            pose_gt = pose[:, Switch_Position, :]
+            pose_gt = pose_gt[1:, :, :] - pose_gt[:-1, :, :]    ### 减去前一时刻的坐标
+            zero = np.zeros_like(pose_gt[0:1, :, :])
+
+            pose_gt = np.concatenate([zero, pose_gt], axis=0)
+            
+        elif self.pose_represent == 'rotation':
+            pose = self.pose[act][index:index+self.clip_length]   ### clip_length长度的图像序列我们会估计clip_length-1长度的身体位姿变化
+            pose = pose[:, Bone_Addr_17joints_new, :]
+            pose_gt = pose[:, Switch_Position, 3:]      ### quat 4 elements; 17 joints
+            # print("pose shape: ", pose_gt.shape)
+            pose_gt = pose[:, 1:, 3:]    ### skip root quat
         return pose_gt
 
     def _load_slam_results(self, directory, index):
         slam_results = torch.tensor(np.load(os.path.join(directory, 'feature_10frames.npy')))
         return slam_results[index:index+self.clip_length] 
 
-    def sample(self, input, ratio=0.5):
+    def sample(self, input, ratio=0.5, mode='add'):
         new_num_frames = int(ratio * self.clip_length)
-        downsamp_inds = np.linspace(0, self.clip_length-1, num=new_num_frames, endpoint=False, dtype=int)
-        input_sample = input[downsamp_inds]
+        downsamp_inds = np.linspace(0, self.clip_length, num=new_num_frames, endpoint=False, dtype=int)
+
+        if mode == 'add':
+            input_sample = input[downsamp_inds]
+            downsamp_inds_odd = np.linspace(1, self.clip_length+1, num=new_num_frames, endpoint=False, dtype=int)
+            input_sample_2 = input[downsamp_inds_odd]
+            input_sample[1:] += input_sample_2[:-1]
+        elif mode == 'sample':
+            input_sample = input[downsamp_inds]
         return input_sample
 
     def __len__(self):
@@ -184,16 +207,19 @@ class EgoMotionDataset(torch.utils.data.Dataset):
         pose_gt = self._load_mocap(action, index_in_mocap)
         if self.use_slam:
             slam_features = self._load_slam_results(slam_results_path, index_in_video)
-            slam_clip = self.sample(slam_features)
-            pose_gt = self.sample(pose_gt)
+            slam_clip = self.sample(slam_features, ratio=0.5)
+            pose_gt = self.sample(pose_gt, ratio=0.5)
             img_clip = self._load_image_clip(video_path, index_in_video)
-            img_clip = self.sample(img_clip)
-            return slam_clip, pose_gt, img_clip
-        # else:
-        #     img_clip = self._load_image_clip(video_path, index_in_video)
-        #     ### load mocap data
-        #     img_clip, pose_gt = self.sample(img_clip, pose_gt)
-        #     return img_clip, pose_gt
+            img_clip = self.sample(img_clip, ratio=0.5)
+            if self.pose_represent == 'position':
+                return slam_clip, pose_gt[1:], img_clip
+            elif self.pose_represent == 'rotation':
+                return slam_clip, pose_gt[1:], img_clip
+        else:
+            img_clip = self._load_image_clip(video_path, index_in_video)
+            ### load mocap data
+            img_clip, pose_gt = self.sample(img_clip, pose_gt)
+            return img_clip, pose_gt
 
 if __name__=='__main__':
     config_path = '../data/EgoMotion/meta_remy.yml'
@@ -260,10 +286,11 @@ if __name__=='__main__':
                              config_path=config_path,
                              image_tmpl=image_tmpl,
                              transform=transforms,
-                             clip_length=16)
+                             clip_length=16,
+                             use_slam=True)
     print(len(ego_dataset))
     index = 177
-    slam, pose_gt = ego_dataset[index]
+    slam, pose_gt, img_clip = ego_dataset[index]
     print(pose_gt.shape)
     print(slam.shape)
     # print(action, pair_of_clip.shape)

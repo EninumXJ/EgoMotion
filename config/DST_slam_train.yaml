@@ -1,5 +1,5 @@
 # General  
-experiment_name: exp05 
+experiment_name: exp07 
 train_2d: False
 no_eval: False
 finetune: False
@@ -34,6 +34,7 @@ rootrel: True
 sample_stride: 1
 num_joints: 17
 use_slam: True
+use_depth: False
 gt_2d: False
 
 # Loss

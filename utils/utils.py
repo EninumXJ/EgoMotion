@@ -4,7 +4,7 @@ import numpy as np
 import time
 import matplotlib.pyplot as plt
 from sklearn import (manifold, datasets, decomposition, ensemble, discriminant_analysis, random_projection)
-import hypertools as hyp
+# import hypertools as hyp
 import torch.nn.functional as F
 
 def mkdirs(paths):

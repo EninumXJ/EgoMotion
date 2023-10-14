@@ -1,9 +1,12 @@
+import sys
+sys.path.append('utils/')
 import math3d
-import bvh_helper
+import bvh_helper as bvh_helper
 
 import numpy as np
 from pprint import pprint
-
+from bvh import Bvh
+import math
 
 class CMUSkeleton(object):
 
@@ -282,7 +285,6 @@ class CMUSkeleton(object):
 
         return channel
 
-
     def poses2bvh(self, poses_3d, header=None, output_file=None):
         if not header:
             header = self.get_bvh_header(poses_3d)
@@ -295,3 +297,33 @@ class CMUSkeleton(object):
             bvh_helper.write_bvh(output_file, header, channels)
         
         return channels, header
+    
+    def get_bone_length(self, bvh_file):
+        with open(bvh_file) as f:
+           mocap = Bvh(f.read())
+        joint_name = mocap.get_joints_names()
+        self.bone_length = {}
+        for joint in joint_name:
+            offset = mocap.joint_offset(joint)
+            bone_len = math.sqrt(offset[0]**2 + offset[1]**2 + offset[2]**2)
+            self.bone_length[joint] = bone_len
+
+
+    def foward(self, joint_rot):
+        euler_angle = joint_rot.as_euler('xyz', degrees=True)
+        self.joint_pose = {}
+        for joint, index in enumerate(self.keypoint2index):
+            if index == -1:
+                continue
+            pose = self.ComputeJointPosition(joint)
+
+    def ComputeJointPosition(self, joint):
+        if joint != 'Head' and joint[:-4] != 'Hand' and joint[:-4] != 'Foot':
+            pose = pose + self.ComputeJointPosition(self, self.children[joint])
+        else:
+            pose = self.joint_pose[self.parent[joint]] + self.bone_length
+
+if __name__=='__main__':
+    bvh_file_path = '/home/litianyi/workspace/EgoMotion/data/EgoMotion/bvh/02_01.bvh'
+    skeleton = CMUSkeleton()
+    skeleton.get_bone_length(bvh_file_path)

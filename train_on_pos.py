@@ -1,3 +1,4 @@
+### this file is trained to predict 3d pos at one instant
 from model.twin_network import TwinNetwork, R3D
 from dataset.ego_dataset import EgoDataset
 from utils.transforms import *

@@ -38,9 +38,10 @@ def parse_args():
     opts = parser.parse_args()
     return opts
 
-def evaluate(args, feature_extractor, backbone, model, proj, val_loader):
+def evaluate(args, model, proj, val_loader, feature_extractor=None, backbone=None):
     print('INFO: Testing')
-    results_all = []; gt_all = []
+    results_all = []; gt_all = []; losses_all = {}
+    losses_all['total'] = AverageMeter()
     model.eval()
     proj.eval()           
     with torch.no_grad():
@@ -48,19 +49,41 @@ def evaluate(args, feature_extractor, backbone, model, proj, val_loader):
             for idx, (_, batch_gt, batch_input) in enumerate(val_loader):
                 N, C = batch_gt.shape[:2]
                 if torch.cuda.is_available():
-                    batch_input = batch_input.cuda().reshape(-1, 3, 224, 224)
+                    batch_input = batch_input.cuda()
                     batch_gt = batch_gt.cuda()
-                # predict depth
-                with torch.no_grad():
-                    depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
-                depth = depth.reshape(N, C, 1, 224, 224)
-                
-                # Predict 3D poses
-                inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
+                if args.use_depth:    
+                    # predict depth
+                    batch_input = batch_input.reshape(-1, 3, 224, 224)
+                    with torch.no_grad():
+                        depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
+                    depth = depth.reshape(N, C, 1, 224, 224)
+                    # Predict 3D poses
+                    inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
+                else:
+                    inputs = batch_input.permute(0, 2, 1, 3, 4)
                 embeddings = model(inputs)
                 # (N, F, J, C) = (32, 10, 17, 3)
                 predicted_3d_pos = proj(embeddings).reshape(N, -1, 17, 3)    # (N, T, 17, 3)
-               
+                ### compute loss
+                predicted_3d_pos = torch.cumsum(predicted_3d_pos, dim=1)
+                batch_gt = torch.cumsum(batch_gt, dim=1)
+                
+                loss_3d_pos = loss_mpjpe(predicted_3d_pos, batch_gt)
+                loss_3d_scale = n_mpjpe(predicted_3d_pos, batch_gt)
+                loss_3d_velocity = loss_velocity(predicted_3d_pos, batch_gt)
+                loss_lv = loss_limb_var(predicted_3d_pos)
+                loss_lg = loss_limb_gt(predicted_3d_pos, batch_gt)
+                loss_a = loss_angle(predicted_3d_pos, batch_gt)
+                loss_av = loss_angle_velocity(predicted_3d_pos, batch_gt)
+                loss_total = loss_3d_pos * 5 + \
+                                args.lambda_scale       * loss_3d_scale + \
+                                args.lambda_3d_velocity * loss_3d_velocity + \
+                                args.lambda_lv          * loss_lv + \
+                                args.lambda_lg          * loss_lg + \
+                                args.lambda_a           * loss_a  + \
+                                args.lambda_av          * loss_av
+                losses_all['total'].update(loss_total.item(), N)
+                
                 results_all.append(predicted_3d_pos.cpu().numpy())
                 gt_all.append(batch_gt.cpu().numpy())
                 if idx % 10 == 0:
@@ -109,7 +132,7 @@ def evaluate(args, feature_extractor, backbone, model, proj, val_loader):
     print('Protocol #1 Error (MPJPE):', e1, 'mm')
     print('Protocol #2 Error (P-MPJPE):', e2, 'mm')
     print('----------')
-    return e1, e2, results_all
+    return e1, e2, losses_all
 
 def depth_estimate(image, feature_extractor, model):
 
@@ -138,7 +161,7 @@ def depth_estimate(image, feature_extractor, model):
     # depth = Image.fromarray(formatted)
     return predicted_depth_norm
 
-def train_epoch(args, feature_extractor, backbone, model, proj, train_loader, losses, optimizer):
+def train_epoch(args, model, proj, train_loader, losses, optimizer, feature_extractor=None, backbone=None):
     model.train()
     proj.train()
     with tqdm(total=len(train_loader)) as pbar:
@@ -146,19 +169,25 @@ def train_epoch(args, feature_extractor, backbone, model, proj, train_loader, lo
             N, C = batch_input.shape[0:2]
             # print("input shape: ", batch_input.shape)
             if torch.cuda.is_available():
-                batch_input = batch_input.cuda().reshape(-1, 3, 224, 224)
+                batch_input = batch_input.cuda()
                 batch_gt = batch_gt.cuda()
-                
-            # predict depth
-            with torch.no_grad():
-                depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
-            depth = depth.reshape(N, C, 1, 224, 224)
-            # Predict 3D poses
-            inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
+            if args.use_depth:    
+                # predict depth
+                batch_input = batch_input.reshape(-1, 3, 224, 224)
+                with torch.no_grad():
+                    depth = depth_estimate(batch_input*255, feature_extractor, backbone)  ### Normalize->[0,255]
+                depth = depth.reshape(N, C, 1, 224, 224)
+                # Predict 3D poses
+                inputs = torch.repeat_interleave(depth, 3, dim=2).permute(0, 2, 1, 3, 4)
+            else:
+                inputs = batch_input.permute(0, 2, 1, 3, 4)
             embeddings = model(inputs)
             # (N, F, J, C) = (32, 10, 17, 3)
             predicted_3d_pos = proj(embeddings).reshape(N, -1, 17, 3)    # (N, T, 17, 3)
             optimizer.zero_grad()
+            
+            predicted_3d_pos = torch.cumsum(predicted_3d_pos, dim=1)
+            batch_gt = torch.cumsum(batch_gt, dim=1)
 
             loss_3d_pos = loss_mpjpe(predicted_3d_pos, batch_gt)
             loss_3d_scale = n_mpjpe(predicted_3d_pos, batch_gt)
@@ -167,7 +196,7 @@ def train_epoch(args, feature_extractor, backbone, model, proj, train_loader, lo
             loss_lg = loss_limb_gt(predicted_3d_pos, batch_gt)
             loss_a = loss_angle(predicted_3d_pos, batch_gt)
             loss_av = loss_angle_velocity(predicted_3d_pos, batch_gt)
-            loss_total = loss_3d_pos * 2 + \
+            loss_total = loss_3d_pos * 5 + \
                             args.lambda_scale       * loss_3d_scale + \
                             args.lambda_3d_velocity * loss_3d_velocity + \
                             args.lambda_lv          * loss_lv + \
@@ -189,7 +218,7 @@ def train_epoch(args, feature_extractor, backbone, model, proj, train_loader, lo
             if idx % 10 == 0:
                 pbar.update(10)
 
-def train(args, opts, feature_extractor, backbone, model, proj, train_loader, val_loader, checkpoint=None):
+def train(args, opts, model, proj, train_loader, val_loader, checkpoint=None, feature_extractor=None, backbone=None):
     st = 0
     min_loss = 100000
     if not opts.evaluate:
@@ -222,7 +251,8 @@ def train(args, opts, feature_extractor, backbone, model, proj, train_loader, va
             losses['angle'] = AverageMeter()
             losses['angle_velocity'] = AverageMeter()
             
-            train_epoch(args, feature_extractor, backbone, model=model, proj=proj, train_loader=train_loader, losses=losses, optimizer=optimizer) 
+            train_epoch(args, model=model, proj=proj, train_loader=train_loader, losses=losses, optimizer=optimizer,
+                         feature_extractor=feature_extractor, backbone=backbone) 
             elapsed = (time() - start_time) / 60    
 
             if args.no_eval:
@@ -232,7 +262,8 @@ def train(args, opts, feature_extractor, backbone, model, proj, train_loader, va
                     lr,
                    losses['3d_pos'].avg))
             else:
-                e1, e2, results_all = evaluate(args, feature_extractor, backbone, model=model, proj=proj, val_loader=val_loader)
+                e1, e2, losses_test = evaluate(args, model=model, proj=proj, val_loader=val_loader,
+                                               feature_extractor=feature_extractor, backbone=backbone)
                 print('[%d] time %.2f lr %f 3d_train %f e1 %f e2 %f' % (
                     epoch + 1,
                     elapsed,
@@ -252,7 +283,8 @@ def train(args, opts, feature_extractor, backbone, model, proj, train_loader, va
                     wandb.log({'epoch': epoch+1, 'loss_lg': losses['lg'].avg})
                     wandb.log({'epoch': epoch+1, 'loss_a': losses['angle'].avg})
                     wandb.log({'epoch': epoch+1, 'loss_av': losses['angle_velocity'].avg})
-                    wandb.log({'epoch': epoch+1, 'loss_total': losses['total'].avg})
+                    wandb.log({'epoch': epoch+1, 'loss_total_train': losses['total'].avg})
+                    wandb.log({'epoch': epoch+1, 'loss_total_test': losses_test['total'].avg})
             # ------------------------------------------------------------------- 
             # Decay learning rate exponentially
             lr *= lr_decay
@@ -334,19 +366,24 @@ def main(args, opts):
                         pretrained_model='/data/newhome/litianyi/model/TimeSformer/TimeSformer_divST_8x32_224_K600.pyth')
     
     # projector
-    proj = Projector(224, 17*3*8, 512)
+    proj = Projector(224, 17*3*7, 512)
     model_params = 0
     for parameter in model.parameters():
         model_params = model_params + parameter.numel()
     print('INFO: Trainable parameter count:', model_params)
 
-    feature_extractor = GLPNFeatureExtractor.from_pretrained("vinvino02/glpn-nyu")
-    backbone = GLPNForDepthEstimation.from_pretrained("vinvino02/glpn-nyu")
-    if torch.cuda.is_available():
-        # feature_extractor = nn.DataParallel(feature_extractor)
-        # feature_extractor = feature_extractor.cuda()
-        backbone = nn.DataParallel(backbone)
-        backbone = backbone.cuda()
+    ### init depeth estimator
+    if args.use_depth:
+        feature_extractor = GLPNFeatureExtractor.from_pretrained("vinvino02/glpn-nyu")
+        backbone = GLPNForDepthEstimation.from_pretrained("vinvino02/glpn-nyu")
+        if torch.cuda.is_available():
+            # feature_extractor = nn.DataParallel(feature_extractor)
+            # feature_extractor = feature_extractor.cuda()
+            backbone = nn.DataParallel(backbone)
+            backbone = backbone.cuda()
+    else:
+        feature_extractor = None
+        backbone = None
 
     if torch.cuda.is_available():
         model = nn.DataParallel(model)
@@ -365,9 +402,9 @@ def main(args, opts):
         proj.load_state_dict(checkpoint['proj'], strict=True)
     #----------------------------------------------------------------------------
     if not opts.evaluate:
-        train(args, opts, feature_extractor, backbone, model, proj, train_loader, val_loader, checkpoint)
+        train(args, opts, model, proj, train_loader, val_loader, checkpoint, feature_extractor, backbone)
     else:
-        e1, e2, results_all = evaluate(args, feature_extractor, backbone, model, proj, val_loader) 
+        e1, e2, results_all = evaluate(args, model, proj, val_loader, feature_extractor, backbone) 
 
 def save_checkpoint(ckpt_path, epoch, lr, optimizer, model, min_loss):
     print('Saving checkpoint to', ckpt_path)
