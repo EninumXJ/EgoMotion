@@ -13,3 +13,6 @@ vinvino02/
 AnimationTool/
 predict_3d_pos/
 MotionBERT/
+vis/blender_utils/
+vis/vis_results/
+vis/*.html
