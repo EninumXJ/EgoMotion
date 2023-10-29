@@ -53,6 +53,22 @@ def p_mpjpe(predicted, target):
 
 # PyTorch-based errors (for losses)
 
+def loss_quat_v(predicted, target):
+    """
+    Mean per-joint quat error (i.e. mean Euclidean distance),
+    """
+    assert predicted.shape == target.shape
+    x_v = predicted[:, 1:] - predicted[:, :-1]
+    gt_v = target[:, 1:] - target[:, :-1]
+    return nn.L1Loss()(x_v, gt_v)
+
+def loss_quat(predicted, target):
+    """
+    Mean per-joint quat error (i.e. mean Euclidean distance),
+    """
+    assert predicted.shape == target.shape
+    return torch.mean(torch.norm(predicted - target, dim=len(target.shape)-1))
+
 def loss_mpjpe(predicted, target):
     """
     Mean per-joint position error (i.e. mean Euclidean distance),

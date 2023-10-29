@@ -90,9 +90,43 @@ def get_smpl_parents():
 
     return parents
 
+def output2quat(lrot_quat, joint_rot_initial):
+        clip_len = lrot_quat.shape[1]
+        lrot_quat_initial = transforms.matrix_to_quaternion(transforms.euler_angles_to_matrix(joint_rot_initial[:,0:1,...], convention='ZYX')) ### (B,T,J,3)->（B,T,J,4）
+        lrot_quat_status = []
+        lrot_quat_status.append(lrot_quat_initial)
+        for i in range(0, clip_len):
+            curr_quat = lrot_quat_status[-1]
+            lrot_quat_status.append(transforms.quaternion_multiply(curr_quat, lrot_quat[:, i:i+1,...]))
+            # print(lrot_quat_status[-1].shape)
+        return torch.stack(lrot_quat_status, dim=1).squeeze(2)
+
+def output2matrix(lrot_rot6d, joint_rot_initial):
+        clip_len = lrot_rot6d.shape[1]
+        joint_matrix = transforms.euler_angles_to_matrix(joint_rot_initial[:,0:1,...], convention='ZYX') ### (B,T,J,3)->（B,T,J,3,3）
+        lrot_matrix = []
+        lrot_matrix.append(joint_matrix)
+        for i in range(0, clip_len):
+            curr_matrix= lrot_matrix[-1]
+            lrot_matrix.append(torch.matmul(curr_matrix, transforms.rotation_6d_to_matrix(lrot_rot6d[:, i:i+1,...])))
+            # print(lrot_quat_status[-1].shape)
+        return torch.stack(lrot_matrix, dim=1).squeeze(2)
+
+def collate_function(data):
+    output = list(zip(*data))
+    lrot_gt, img_clip, root, joint_rot, name_index = output[0], output[1], output[2], output[3], output[4]
+    lrot_gt = torch.stack(lrot_gt, 0)
+    img_clip = torch.stack(img_clip, 0)
+    root = torch.stack(root, 0)
+    joint_rot = torch.stack(joint_rot, 0)
+    video_index = list(name_index)
+    return (lrot_gt, img_clip, root, joint_rot, video_index)
+
+
 class KinPolyDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_path, config_path, image_tmpl="{:05d}.jpg",
-                 transform=None, clip_length=10, mode='train'):
+                 transform=None, clip_length=10, mode='train', use_slam=False, rot='rot6d',
+                 coordinate='local'):
         self.dataset_path = dataset_path
         with open(config_path, 'r') as f:
             config = yaml.load(f.read(),Loader=yaml.FullLoader)
@@ -100,11 +134,14 @@ class KinPolyDataset(torch.utils.data.Dataset):
             self.action_list = config['train']
         elif mode == 'test':
             self.action_list = config['test']
+        self.mode = mode
         self.clip_length = clip_length
         mocap_path = os.path.join(self.dataset_path, 'mocap_annotations.p')
         self.mocap_data = joblib.load(mocap_path)
         self.transform = transform
         self.image_tmpl = image_tmpl
+        self.rot = rot
+        self.coordinate = coordinate
         self.preprocess(config)
 
     def preprocess(self, config):
@@ -118,16 +155,21 @@ class KinPolyDataset(torch.utils.data.Dataset):
             if config["video_mocap_sync"][action] == None:
                 continue
             # self.action_video_num[action] = {}
+            _, name = action.split('-', 1)
+            img_path = os.path.join(self.dataset_path, 'images', name)
+            files = os.listdir(img_path)   # 读入文件夹
+            video_end_frame = len(files)       # 统 计文件夹中的文件个数
             # index: '1', '2', ...
-            mocap_frames = int(config["video_mocap_sync"][action][2] - config["video_mocap_sync"][action][1])
+            total_frames = min(int(config["video_mocap_sync"][action][2]), video_end_frame) - int(config["video_mocap_sync"][action][1])
             # print("{0} mocap frames: {1}".format(action, mocap_frames))
             # mocap_frames_2 = int(config["mocap_frames"][action])
             # print("mocap_frames: ", mocap_frames)
             # print("mocap_frames_2: ", mocap_frames_2)
-            useful_frames = mocap_frames - 2*self.clip_length  # 去掉首尾2个clip
+            useful_frames = total_frames - 2*self.clip_length  # 去掉首尾2个clip
             mocap_video_gap = int(config["video_mocap_sync"][action][0])
             mocap_start_frame = int(config["video_mocap_sync"][action][1])
             mocap_end_frame = int(config["video_mocap_sync"][action][2])
+            
             self.action_video_num[num] = (action, mocap_video_gap, mocap_start_frame, mocap_end_frame)
             self.action_index_range.append(range(num_frames, num_frames+useful_frames))
             num += 1
@@ -145,39 +187,77 @@ class KinPolyDataset(torch.utils.data.Dataset):
 
     def _load_mocap(self, action, index):
         ### kinpoly pose: 23 joints + 1 root
-        # print("index: ", index)
         # print("mocap frames: ", self.mocap_data[action]['qpos'].shape)
         joint_rot = self.mocap_data[action]['qpos'][index:index+self.clip_length, 7:]
         # print("joint_rot shape: ", joint_rot.shape)
-        root = torch.from_numpy(self.mocap_data[action]['qpos'][index:index+self.clip_length, :7])
-        print("root shape: ", root.shape)
-        joint_rot = torch.from_numpy(joint_rot.reshape(self.clip_length, -1, 3))   # TxJx3
-        # print("joint_rot shape: ", joint_rot.shape)
+        root = torch.from_numpy(self.mocap_data[action]['qpos'][index:index+self.clip_length, :7]).float()
+        # print("root shape: ", root.shape)
+        joint_rot = torch.from_numpy(joint_rot.reshape(self.clip_length, -1, 3)).float()   # TxJx3
+        # print("joint_rot: ", joint_rot) 
         # euler angle: (Z Y X) -> (X Y Z)
         # joint_rot = joint_rot[:,:,[2,1,0]]
-        lrot_quat_status = transforms.matrix_to_quaternion(transforms.euler_angles_to_matrix(joint_rot, convention='ZYX'))   ## TxJx4
-        # print("lrot_quat_status shape: ", lrot_quat_status.shape)
-        lrot_quat = transforms.quaternion_multiply(transforms.quaternion_invert(lrot_quat_status[:-1, ...]),
-                                                   lrot_quat_status[1:, ...])
-        # print("lrot_quat shape: ", lrot_quat.shape)
-        ## lrot_quat表征该时刻的旋转相对于上一时刻的旋转量：以四元数表示
-        
-        zero = torch.zeros_like(lrot_quat[0:1,...])
-        lrot_gt = torch.cat([zero, lrot_quat], dim=0)
+        if self.rot == 'quat4d':
+            lrot_quat_status = transforms.matrix_to_quaternion(transforms.euler_angles_to_matrix(joint_rot, convention='ZYX'))   ## T x J x 4
+            
+            lrot_quat = transforms.quaternion_multiply(transforms.quaternion_invert(lrot_quat_status[:-1, ...]),
+                                                    lrot_quat_status[1:, ...])
+            # print("lrot_quat shape: ", lrot_quat.shape)
+            ## lrot_quat表征该时刻的旋转相对于上一时刻的旋转量：以四元数表示
+            
+            zero = torch.zeros_like(lrot_quat[0:1,...])
+            lrot_gt = torch.cat([zero, lrot_quat], dim=0)
+        elif self.rot == 'rot6d':
+            lrot_matrix = transforms.euler_angles_to_matrix(joint_rot, convention='ZYX')   # (T) X J x 3 X 3
+            ##### copy from: https://github.com/lijiaman/egoego_release/blob/4dae8cb67b453f0a0042809bf37aafad5604615b/utils/data_utils/process_kinpoly_qpos2smpl.py#L498C8-L498C88
+            lrot_matrix_diff = torch.matmul(torch.linalg.inv(lrot_matrix[:-1, ...]), lrot_matrix[1:, ...])  # (T-1) X J X 3 X 3
+            # 3 X 3 matrix -> 6d rotation
+            lrot_6d = transforms.matrix_to_rotation_6d(lrot_matrix_diff)
+            zero = torch.zeros_like(lrot_6d[0:1, ...])  
+            lrot_gt = torch.cat([zero, lrot_6d], dim=0)   # T X J X 6
+        return lrot_gt, root, joint_rot
 
-        initial_rot = joint_rot
-
-        return lrot_gt, root, initial_rot, joint_rot 
+    def _load_root_traj(self, action, index):
+        root_traj = torch.from_numpy(self.mocap_data[action]['qpos'][index:index+self.clip_length, :7]).float()   # T X 7
+        root_trans = root_traj[..., 0:3]    # T X 3
+        root_quat = root_traj[..., 3:]      # T X 4
+        root_trans_diff = root_trans[1:, ...] - root_trans[:-1, ...]  # (T-1) X 3
+        if self.rot == 'rot6d':
+            root_quat_diff = transforms.quaternion_multiply(transforms.quaternion_invert(root_quat[:-1, ...]), root_quat[1:, ...])
+            root_rot6d_diff = transforms.matrix_to_rotation_6d(transforms.quaternion_to_matrix(root_quat_diff))
+            root_rot_diff = root_rot6d_diff   # (T-1) X 6
+        elif self.rot == 'quat4d':
+            root_quat_diff = transforms.quaternion_multiply(transforms.quaternion_invert(root_quat[:-1, ...]), root_quat[1:, ...])
+            root_rot_diff = root_quat_diff    # (T-1) X 4
+        # initial_traj = root_traj[0]
+        root_trans_zeros = torch.zeros_like(root_trans_diff[0:1])
+        root_rot_zeros = torch.zeros_like(root_rot_diff[0:1])
+        root_trans_diff = torch.cat([root_trans_zeros, root_trans_diff], dim=0)  # T X 3
+        root_rot_diff = torch.cat([root_rot_zeros, root_rot_diff], dim=0)  # T X 4 or T X 6
+        # print("root_trans_diff shape: ", root_trans_diff.shape)
+        # print("root_rot_diff shape: ", root_rot_diff.shape)
+        return root_trans_diff, root_rot_diff, root_traj
 
     def sample(self, input, ratio=0.5, mode='add'):
         new_num_frames = int(ratio * self.clip_length)
         downsamp_inds = np.linspace(0, self.clip_length, num=new_num_frames, endpoint=False, dtype=int)
 
         if mode == 'add':
-            input_sample = input[downsamp_inds]
-            downsamp_inds_odd = np.linspace(1, self.clip_length+1, num=new_num_frames, endpoint=False, dtype=int)
-            input_sample_2 = input[downsamp_inds_odd]
-            input_sample[1:] = transforms.quaternion_multiply(input_sample_2[:-1], input_sample[1:])
+            if input.shape[-1] == 3:   ### trans
+                input_sample = input[downsamp_inds]
+                downsamp_inds_odd = np.linspace(1, self.clip_length+1, num=new_num_frames, endpoint=False, dtype=int)
+                input_sample_2 = input[downsamp_inds_odd]
+                input_sample[1:] = input_sample_2[:-1] + input_sample[1:]
+            else:
+                input_sample = input[downsamp_inds]
+                downsamp_inds_odd = np.linspace(1, self.clip_length+1, num=new_num_frames, endpoint=False, dtype=int)
+                input_sample_2 = input[downsamp_inds_odd]
+                if self.rot == 'quat4d':
+                    input_sample[1:] = transforms.quaternion_multiply(input_sample_2[:-1], input_sample[1:])
+                elif self.rot == 'rot6d':
+                    input_sample_matrix = transforms.rotation_6d_to_matrix(input_sample)
+                    input_sample_2_matrix = transforms.rotation_6d_to_matrix(input_sample_2)
+                    input_sample[1:] = transforms.matrix_to_rotation_6d(torch.matmul(input_sample_2_matrix[:-1], input_sample_matrix[1:]))
+
         elif mode == 'sample':
             input_sample = input[downsamp_inds]
         return input_sample
@@ -189,18 +269,34 @@ class KinPolyDataset(torch.utils.data.Dataset):
         ind_bool = [index in i for i in self.action_index_range]
         # ind表示该index属于第ind个动作视频对
         ind = ind_bool.index(True)
-        
+ 
         action, mocap_video_gap, mocap_start_frame, mocap_end_frame = self.action_video_num[ind]
         _, name = action.split('-', 1)
         video_path = os.path.join(self.dataset_path, 'images', name)
         index_in_video = index - self.action_index_range[ind][0] + mocap_start_frame + mocap_video_gap + self.clip_length
         index_in_mocap = index - self.action_index_range[ind][0] + self.clip_length  ###这里不需要加上start_frame，因为.p文件中已经将相应的mocap片段裁剪好了
-        lrot_gt, root, initial_rot, joint_rot = self._load_mocap(action, index_in_mocap)
-        img_clip = self._load_image_clip(video_path, index_in_video)
-        # img_clip = self.sample(img_clip, mode='sample')
-        # initial_rot = self.sample(initial_rot, mode='sample')
-        # lrot_gt = self.sample(lrot_gt, mode='add')
-        return lrot_gt, img_clip, root, initial_rot, joint_rot
+        if self.coordinate == 'local':
+            lrot_gt, root, joint_rot = self._load_mocap(action, index_in_mocap)
+            img_clip = self._load_image_clip(video_path, index_in_video)
+            img_clip = self.sample(img_clip, mode='sample')
+            lrot_gt = self.sample(lrot_gt, mode='add')
+            joint_rot = self.sample(joint_rot, mode='sample')
+            root = self.sample(root, mode='sample')
+            if self.mode == 'train':
+                return lrot_gt, img_clip, root, joint_rot
+            elif self.mode == 'test':
+                return lrot_gt, img_clip, root, joint_rot, (name, index_in_video)
+        elif self.coordinate == 'global':
+            root_trans_diff, root_rot_diff, root_traj = self._load_root_traj(action, index_in_mocap)
+            img_clip = self._load_image_clip(video_path, index_in_video)
+            img_clip = self.sample(img_clip, mode='sample')
+            root_traj = self.sample(root_traj, mode='sample')
+            root_trans_diff = self.sample(root_trans_diff, mode='add')
+            root_rot_diff = self.sample(root_rot_diff, mode='add')
+            if self.mode == 'train':
+                return img_clip, root_trans_diff[1:,...], root_rot_diff[1:,...], root_traj
+            elif self.mode == 'test':
+                return img_clip, root_trans_diff[1:,...], root_rot_diff[1:,...], root_traj, (name, index_in_video)
     
     def get_rest_pose_joints(self):
         zero_root_trans = torch.zeros(1, 1, 3).cuda().float()
@@ -218,7 +314,7 @@ class KinPolyDataset(torch.utils.data.Dataset):
         rest_human_offsets = rest_human_jnts.squeeze(0) - rest_human_jnts.squeeze(0)[:, parents, :]
 
         return rest_human_offsets # 1 X J X 3 
-
+    
     def fk_smpl(self, root_trans, lrot_aa):
         # root_trans: N X 3 
         # lrot_aa: N X J X 3 
@@ -257,41 +353,35 @@ if __name__=='__main__':
     img_transforms = torchvision.transforms.Compose([
                     torchvision.transforms.Resize((224,224)),
                     torchvision.transforms.ToTensor()])
-    kinpolydata = KinPolyDataset(dataset_path=dataset_path, config_path=config_path, clip_length=16, transform=img_transforms)
+    kinpolydata = KinPolyDataset(dataset_path=dataset_path, config_path=config_path, clip_length=16, 
+                                 transform=img_transforms, rot='rot6d', coordinate='global')
     index = 177
-    lrot_gt, img_clip, root, initial_rot = kinpolydata[index]
-    print(lrot_gt.shape)
-    print(img_clip.shape)
-    print(root.shape)
-    print(initial_rot.shape)
+    img_clip, root_trans_diff, root_rot_diff, initial_rot = kinpolydata[index]
+    print("img_clip: ", img_clip.shape)
+    print("root_trans_diff: ", root_trans_diff.shape)
+    print("root_rot_diff: ", root_rot_diff.shape)
+    print("initial_rot shape: ", initial_rot.shape)
+    
+    # #### small experiment
+    # import math
+    # axis_angle_1 = torch.tensor([[30./180*math.pi, 60/180*math.pi, 0]])   ## ZYX
+    # axis_angle_2 = torch.tensor([[60./180*math.pi, 90/180*math.pi, 30./180*math.pi]])   ## ZYX
+    # axis_angle = torch.cat([axis_angle_1, axis_angle_2], dim=0)
+    # print(axis_angle.shape)
+    # matrix = transforms.euler_angles_to_matrix(axis_angle, convention='ZYX')
+    # print("matrix: ", matrix)
+    # lrot_quat_status = transforms.matrix_to_quaternion(matrix)   ## TxJx4
+    # print("lrot_quat_status: ", lrot_quat_status)
+    # # print("lrot_quat_status shape: ", lrot_quat_status.shape)
+    # lrot_quat = transforms.quaternion_multiply(transforms.quaternion_invert(lrot_quat_status[:-1, ...]),
+    #                                            lrot_quat_status[1:, ...])
+    # print("lrot_quat_1: ", lrot_quat)
 
-    #### small experiment
-    import math
-    axis_angle_1 = torch.tensor([[30./180*math.pi, 60/180*math.pi, 0]])   ## ZYX
-    axis_angle_2 = torch.tensor([[60./180*math.pi, 90/180*math.pi, 30./180*math.pi]])   ## ZYX
-    axis_angle = torch.cat([axis_angle_1, axis_angle_2], dim=0)
-    print(axis_angle.shape)
-    matrix = transforms.euler_angles_to_matrix(axis_angle, convention='ZYX')
-    print("matrix: ", matrix)
-    lrot_quat_status = transforms.matrix_to_quaternion(matrix)   ## TxJx4
-    print("lrot_quat_status: ", lrot_quat_status)
-    # print("lrot_quat_status shape: ", lrot_quat_status.shape)
-    lrot_quat = transforms.quaternion_multiply(transforms.quaternion_invert(lrot_quat_status[:-1, ...]),
-                                               lrot_quat_status[1:, ...])
-    print("lrot_quat_1: ", lrot_quat)
-
-    matrix_rot = torch.matmul(torch.linalg.inv(matrix[:-1,...]), matrix[1:,...])
-    lrot_quat_2 = transforms.matrix_to_quaternion(matrix_rot)
-    print("lrot_quat_2: ", lrot_quat_2)
-    # from scipy.spatial.transform import Rotation as R
-    # matrix_1 = R.from_euler('ZYX', [30./180*math.pi, 60/180*math.pi, 0], degrees=False).as_matrix()
-    # print("matrix_1: ", matrix_1)
-    # matrix_2 = R.from_euler('ZYX', [60./180*math.pi, 90/180*math.pi, 30./180*math.pi], degrees=False).as_matrix()
-    # print("matrix_2: ", matrix_2)
-    # quat_1 = R.from_matrix(matrix_1).as_quat()
-    # print("quat_1: ", quat_1)
-    # quat_2 = R.from_matrix(matrix_2).as_quat()
-    # print("quat_2: ", quat_2)
-    # matrix = np.matmul(np.linalg.inv(matrix_1), matrix_2)
-    # quat = R.from_matrix(matrix).as_quat()
-    # print(quat)
+    # matrix_rot = torch.matmul(torch.linalg.inv(matrix[:-1,...]), matrix[1:,...])
+    # lrot_quat_2 = transforms.matrix_to_quaternion(matrix_rot)
+    # print("lrot_quat_2: ", lrot_quat_2)
+    
+    joint_quat_status = kinpolydata.output2quat(lrot_gt, initial_rot)
+    print(joint_quat_status.shape)
+    joint_euler_status = transforms.matrix_to_euler_angles(transforms.quaternion_to_matrix(joint_quat_status), convention='ZYX')
+    print("joint_euler_status: ", joint_euler_status) 

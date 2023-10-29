@@ -23,7 +23,7 @@ from psbody.mesh.lines import Lines
 from body_model.body_model import BodyModel
 from body_model.utils import SMPL_JOINTS, KEYPT_VERTS
 
-from utils.data_utils.process_kinpoly_qpos2smpl import qpos2smpl_vis
+from utils.data_utils.process_kinpoly_qpos2smpl import qpos2smpl_vis, qpos2smpl
 
 NUM_BETAS = 10
 
@@ -374,15 +374,15 @@ if __name__ == "__main__":
                                  config_path='/data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/mocap_meta.yml',
                                  clip_length=16,
                                  transform=img_transforms)
-    lrot_gt, img_clip, root, initial_rot, joint_rot = kinpolydata[0]
+    lrot_gt, img_clip, root, joint_rot = kinpolydata[0]
     print("lrot_gt shape: ", lrot_gt.shape)
     print("root shape: ", root.shape)
     print("joint rot shape: ", joint_rot.shape)
     root_trans = root[:, :3]
     root_quat = root[:, 3:]
-    vis_res_folder = '/home/litianyi/workspace/EgoMotion/vis/vis_results'
-    root_orient, pose_body = qpos2smpl_vis(joint_rot, root_quat, root_trans, vis_res_folder=vis_res_folder, k_name='kinpoly01')
-    print("pose body shape: ", pose_body.shape)
+    # vis_res_folder = '/home/litianyi/workspace/EgoMotion/vis/vis_results'
+    # root_orient, pose_body = qpos2smpl_vis(joint_rot, root_quat, root_trans, vis_res_folder=vis_res_folder, k_name='kinpoly01')
+    # print("pose body shape: ", pose_body.shape)
     # pose_body = torch.from_numpy(pose_body).reshape(-1, 21, 3)
     # root_orient = torch.from_numpy(root_orient).reshape(-1, 1, 3)
     # aa_rot_rep = torch.cat([root_orient, pose_body], dim=1)
@@ -390,3 +390,7 @@ if __name__ == "__main__":
     # seq_name = "debug_vis"
     # motion_path = "./debug_vis_code_kinpoly.html"
     # vis_mesh_motion(root_trans, aa_rot_rep, betas, seq_name, motion_path, vis_object=False)
+    pose = torch.ones(16, 8, 23, 3)
+    root_aa = torch.ones(16, 8, 4)
+    trans = torch.ones(16, 8, 3)
+    bodypose = qpos2smpl(pose, root_aa, trans)

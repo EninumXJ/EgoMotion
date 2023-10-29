@@ -89,7 +89,7 @@ if __name__ == "__main__":
         
         human_obj_object.rotation_euler = (math.radians(0), math.radians(0), math.radians(0)) # The default seems 90, 0, 0 while importing .obj into blender 
         # obj_object.location.y = 0
-        # human_obj_object.location.y = -1
+        # human_obj_object.location.z = 0
 
         # human_mat = bpy.data.materials.new(name="MaterialName")  # set new material to variable
         # human_obj_object.data.materials.append(human_mat)

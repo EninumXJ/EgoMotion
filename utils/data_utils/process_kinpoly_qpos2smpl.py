@@ -54,9 +54,73 @@ CLUSTER_SIZE_THRESH = 0.25 # if cluster has more than this faction of fps (30 fo
 #
 # Processing
 #
-### Tianyi Li: process our model output to pose of SMPLH standard
-def output2smplpose(lquat, initial_rot):
-    pass
+def qpos2smpl(poses, root_quat, trans):
+    # poses: T X 23 X 3 torch tensor 
+    # root_quat: T X 4 torch tensor 
+    # trans: T X 3 torch tensor 
+    B, T = poses.shape[:2]
+    mujoco2smpl_joint_idx = np.asarray([0,1,5,9,2,6,10,3,7,11,4,8,12,14,19,13,15,20,16,21,17,22,18,23])
+    smplh_path = "/home/litianyi/workspace/egoego_release/smpl_models/smplh_amass/"  
+    smpl_path = ""
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device('cpu')
+    root_aa = quaternion_to_angle_axis(root_quat.float()) # T X 3 
+
+    # Convert euler angle to axis angle representation.
+    poses = poses.reshape(-1, 3) # (T*23) X 3  
+    r = sRot.from_euler('ZYX', poses.data.cpu().numpy(), degrees=False) # zyx is different from ZYX!!
+    rot_mats = r.as_matrix() # (T*23) X 3 X 3 
+    joint_aa = matrot2axisangle(rot_mats) # (T*23) X 1 X 3 
+    joint_aa = torch.from_numpy(joint_aa).float().squeeze(1) # (T*23) X 3
+    if torch.cuda.is_available():
+        joint_aa = joint_aa.cuda()
+        root_aa = root_aa.cuda()
+    joint_aa = joint_aa.reshape(-1, 23, 3) # T X 23 X 3 
+
+    aa_rep = torch.cat((root_aa[:, None, :], joint_aa), dim=1) # T X 24 X 3 
+    # aa_rep = aa_rep.data.numpy() 
+
+    new_poses = aa_rep[:, mujoco2smpl_joint_idx] # T X 24 x 3 
+    # new_poses = torch.from_numpy(new_poses).float().reshape(-1, 72) # B x T X 72 
+    new_poses = new_poses.reshape(-1, 72)
+    new_poses = new_poses.view(-1, 24, 3) # T X 24 X 3
+    new_poses = new_poses.view(-1, 72) # T X 72, axis angle representation 
+
+    num_frames = new_poses.shape[0]
+
+    # SMPL forward to generate joints and vertices 
+    body_jnt_seq = [] 
+    process_inds = [0, min([num_frames, SPLIT_FRAME_LIMIT])]
+
+    gender = "male"
+    use_smplh = True
+    if torch.cuda.is_available():
+        betas = np.zeros(10) 
+        new_poses = new_poses.cuda()
+        trans = trans.cuda()
+    while process_inds[0] < num_frames:
+        # print(process_inds)
+        sidx, eidx = process_inds
+        
+        if use_smplh:
+            body, kintree_table = get_body_model_sequence(smplh_path, gender, process_inds[1] - process_inds[0], \
+                        new_poses[sidx:eidx, 3:-6], None, betas, \
+                        new_poses[sidx:eidx, :3], trans[sidx:eidx])
+        else:
+            body = get_body_model_sequence(smpl_path, gender, process_inds[1] - process_inds[0], \
+                        new_poses[sidx:eidx, 3:], None, betas, \
+                        new_poses[sidx:eidx, :3], trans[sidx:eidx], use_smplh=False)
+  
+        smpl_jnts = body.Jtr
+        smpl_jnts = smpl_jnts[:, :len(SMPL_JOINTS), :]
+
+        body_jnt_seq.append(smpl_jnts) # T X 24 X 3 
+
+        process_inds[0] = process_inds[1]
+        process_inds[1] = min([num_frames, process_inds[1] + SPLIT_FRAME_LIMIT])
+
+    joint_seq = torch.stack(body_jnt_seq, dim=0)
+    return joint_seq
 
 def qpos_to_smpl_data(seq_data):
     # seq_data: T X 76 
@@ -138,7 +202,7 @@ def qpos2smpl_vis(poses, root_quat, trans, vis_res_folder, k_name, vis_gt=False)
     use_smplh = True 
     betas = np.zeros(10) 
     while process_inds[0] < num_frames:
-        print(process_inds)
+        # print(process_inds)
         sidx, eidx = process_inds
         
         if use_smplh:
@@ -165,7 +229,7 @@ def qpos2smpl_vis(poses, root_quat, trans, vis_res_folder, k_name, vis_gt=False)
     vtx_seq = np.concatenate(body_vtx_seq, axis=0)
     joint_seq = np.concatenate(body_jnt_seq, axis=0)
     # print("joint_seq shape: ", joint_seq.shape)
-    print(np.max(joint_seq))
+    # print(np.max(joint_seq))
     # determine floor height and foot contacts 
     fps = 30 
     floor_height, contacts, discard_seq = determine_floor_height_and_contacts(joint_seq, fps)
