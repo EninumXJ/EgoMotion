@@ -49,49 +49,50 @@ def project_root_position(position_arr: np.array, file_name: str):
 def plot_single_pose(
     pose,
     frame_idx,
-    skeleton,
     save_dir,
     prefix,
 ):
     fig = plt.figure()
     ax = fig.add_subplot(111, projection="3d")
+    if prefix == 'gt':
+        color = '#E74C3C'
+    else:
+        color = '#27AE60'
 
-    parent_idx = skeleton.parents()
+    connections = [[0, 1], [0, 2], [0, 3], [1, 4], [2, 5], [4, 7], [5, 8], [3, 6], [6, 9], [9, 15], [9, 16], [9, 17]]
+    for ind, (i,j) in enumerate(connections):
+        ax.plot(
+            [pose[i, 1], pose[j, 1]],
+            [pose[i, 0], pose[j, 0]],
+            [pose[i, 2], pose[j, 2]],
+            c=color,
+        )
+    RADIUS = 0.5
+    x_min = pose[:, 1].min()
+    x_max = pose[:, 1].max()
 
-    for i, p in enumerate(parent_idx):
-        if i > 0:
-            ax.plot(
-                [pose[i, 0], pose[p, 0]],
-                [pose[i, 2], pose[p, 2]],
-                [pose[i, 1], pose[p, 1]],
-                c="k",
-            )
-
-    x_min = pose[:, 0].min()
-    x_max = pose[:, 0].max()
-
-    y_min = pose[:, 1].min()
-    y_max = pose[:, 1].max()
+    y_min = pose[:, 0].min()
+    y_max = pose[:, 0].max()
 
     z_min = pose[:, 2].min()
     z_max = pose[:, 2].max()
-
-    ax.set_xlim(x_min, x_max)
+    ax.view_init(30, 120) 
+    ax.set_xlim(x_min-RADIUS, x_max+RADIUS)
     ax.set_xlabel("$X$ Axis")
 
-    ax.set_ylim(z_min, z_max)
+    ax.set_ylim(y_min-RADIUS, y_max+RADIUS)
     ax.set_ylabel("$Y$ Axis")
 
-    ax.set_zlim(y_min, y_max)
+    ax.set_zlim(z_min, z_max+RADIUS)
     ax.set_zlabel("$Z$ Axis")
 
     plt.draw()
 
-    title = f"{prefix}: {frame_idx}"
+    title = f"{frame_idx}"
     plt.title(title)
     prefix = prefix
     pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
-    plt.savefig(os.path.join(save_dir, prefix + str(frame_idx) + ".png"), dpi=60)
+    plt.savefig(os.path.join(save_dir, prefix + "_{:03d}".format(frame_idx) + ".png"), dpi=200)
     plt.close()
 
 
@@ -253,7 +254,7 @@ def plot_pose_with_stop(
     plt.close()
 
 
-def show3Dpose_animation(channels, parents, dest_vis_path, vis_behave=False):
+def show3Dpose_animation(channels, dest_vis_path, vis_behave=False):
     # channels: K X T X n_joints X 3
     # parents: a list containing the parent joint index 
     fig = plt.figure(figsize=(9, 7))
@@ -265,11 +266,13 @@ def show3Dpose_animation(channels, parents, dest_vis_path, vis_behave=False):
     num_cmp = vals.shape[0]
    
     # Generate connnections list based on parents list 
-    connections = []
-    num_joints = len(parents)
-    for j_idx in range(num_joints):
-        if j_idx > 0:
-            connections.append([parents[j_idx], j_idx])
+    # connections = []
+    # num_joints = len(parents)
+    # for j_idx in range(num_joints):
+    #     if j_idx > 0:
+    #         connections.append([parents[j_idx], j_idx])
+    connections = [[0, 1], [0, 2], [0, 3], [1, 4], [2, 5], [3, 6], [4, 7], [5, 8], [6, 9], [9, 12], [9, 13], [9, 14],
+                [12, 15], [13, 16], [14, 17]]
 
     lines = []
     for cmp_idx in range(num_cmp):
@@ -342,8 +345,7 @@ def show3Dpose_animation_smpl22(channels, dest_vis_path):
     num_cmp = vals.shape[0]
    
     # SMPL connections 22 joints 
-    connections = [[0, 1], [0, 2], [0, 3], [1, 4], [2, 5], [3, 6], [4, 7], [5, 8], [6, 9], [7, 10], [8, 11], [9, 12], [9, 13], [9, 14],
-                [12, 15], [13, 16], [14, 17], [16, 18], [17, 19], [18, 20], [19, 21]]
+    connections = [[0, 1], [0, 2], [0, 3], [1, 4], [2, 5], [4, 7], [5, 8], [3, 9], [9, 15], [9, 16], [9, 17]]
 
     lines = []
     for cmp_idx in range(num_cmp):
@@ -398,7 +400,7 @@ def show3Dpose_animation_smpl22(channels, dest_vis_path):
     # plt.savefig(dest_img_path)
     plt.cla()
     plt.close()
-
+   
 
 if __name__=='__main__':
     pass

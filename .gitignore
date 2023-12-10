@@ -16,3 +16,5 @@ MotionBERT/
 vis/blender_utils/
 vis/vis_results/
 vis/*.html
+*.mp4
+*.obj

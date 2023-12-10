@@ -26,6 +26,7 @@ from utils.data_utils.process_kinpoly_qpos2smpl import qpos2smpl, qpos2smpl_vis
 
 def parse_args():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--log_dir", type=str, default="/data/newhome/litianyi/logs/EgoMotion/", help="Path to the log file.")
     parser.add_argument("--config", type=str, default="config/DST_slam_train.yaml", help="Path to the config file.")
     parser.add_argument('-lr', '--local_resume', default='', type=str, metavar='FILENAME', help='checkpoint to resume (file name)')
     parser.add_argument('-gr', '--global_resume', default='', type=str, metavar='FILENAME', help='checkpoint to resume (file name)')
@@ -40,7 +41,7 @@ def parse_args():
 
 def test(args, globalModel, localModel, localProj, transProj, rotProj, val_loader, feature_extractor, backbone):
     print('INFO: Testing')
-    results_all = []; gt_all = []; losses_all = {}
+    results_all_wo_gt = []; losses_all = {}; results_all_w_gt = []; gt_all = []
     root_all = []; predicted_result_local = []; gt_result_local = []; video_index = []; predicted_result_global = []
     losses_all['total'] = AverageMeter()
     losses_all['loss_quat_v'] = AverageMeter()
@@ -112,12 +113,14 @@ def test(args, globalModel, localModel, localProj, transProj, rotProj, val_loade
                 print("root_trans gt: ", root[:, 0:3])
                 print("root_rot predicted: ", root_rot)
                 print("root_rot gt: ", root[:, 3:])
-                predicted_3d_pos = qpos2smpl(joint_euler_status, root_rot, root_trans)
+                predicted_3d_pos_wo_gt = qpos2smpl(joint_euler_status, root_rot, root_trans)   ## 3d pose wo GT root pose
+                predicted_3d_pos_w_gt = qpos2smpl(joint_euler_status, root[:, 3:], root[:, 0:3])   ## 3d pose with GT root pose
                 # print("predicted_3d_pos shape: ", predicted_3d_pos.shape)
                 batch_gt = qpos2smpl(joint_rot.reshape(-1, 23, 3), root[:, 3:], root[:, 0:3])
                 batch_gt = batch_gt.reshape(N, -1, 22, 3)
-                predicted_3d_pos = predicted_3d_pos.reshape(N, -1, 22, 3)
-                print("predict 3d pos: ", predicted_3d_pos[0])
+                predicted_3d_pos_wo_gt = predicted_3d_pos_wo_gt.reshape(N, -1, 22, 3)
+                predicted_3d_pos_w_gt = predicted_3d_pos_w_gt.reshape(N, -1, 22, 3)
+                print("predict 3d pos: ", predicted_3d_pos_wo_gt[0])
                 print("GT 3d pos: ", batch_gt[0])
                 # -----------------------------------------------------------------------------------
                 # add ground truth
@@ -131,7 +134,8 @@ def test(args, globalModel, localModel, localProj, transProj, rotProj, val_loade
                 video_index.extend(index)
                 predicted_result_global.append(root_predicted.cpu())
                 predicted_result_local.append(joint_euler_status.reshape(N,C,23,3).cpu())
-                results_all.append(predicted_3d_pos.cpu().numpy())
+                results_all_wo_gt.append(predicted_3d_pos_wo_gt.cpu().numpy())
+                results_all_w_gt.append(predicted_3d_pos_w_gt.cpu().numpy())
                 gt_all.append(batch_gt.cpu().numpy())
                 # -----------------------------------------------------------------------------------
                 # update pbar
@@ -139,28 +143,40 @@ def test(args, globalModel, localModel, localProj, transProj, rotProj, val_loade
                     pbar.update(10)
     
     gt_all = np.concatenate(gt_all)
-    results_all = np.concatenate(results_all)
-    print("test clips: ", results_all.shape[0])
-    num_test_clips = len(results_all)
-    e1_all = np.zeros(num_test_clips)
-    e2_all = np.zeros(num_test_clips)
+    results_all_wo_gt = np.concatenate(results_all_wo_gt)
+    results_all_w_gt = np.concatenate(results_all_w_gt)
+    print("test clips: ", results_all_wo_gt.shape[0])
+    num_test_clips = len(results_all_wo_gt)
+    e1_all_wo_gt = np.zeros(num_test_clips)
+    e2_all_wo_gt = np.zeros(num_test_clips)
+    e1_all_w_gt = np.zeros(num_test_clips)
+    e2_all_w_gt = np.zeros(num_test_clips)
     oc = np.zeros(num_test_clips)
 
-    final_results_1 = []; final_results_2 = []
+    final_results_1_wo_gt = []; final_results_2_wo_gt = []; final_results_1_w_gt = []; final_results_2_w_gt = []
     for idx in range(num_test_clips):
         gt = gt_all[idx]
-        pred = results_all[idx]
+        pred_wo_gt = results_all_wo_gt[idx]
+        pred_w_gt = results_all_w_gt[idx]
         # Root-relative Errors
         # pred = pred - pred[:,0:1,:]
         # gt = gt - gt[:,0:1,:]
-        err1 = mpjpe(pred, gt)
-        err2 = p_mpjpe(pred, gt)
+        # print("GT 3d pose: ", gt[0])
+        # print("pred 3d pose: ", pred[0])
+        err1_wo_gt = mpjpe(pred_wo_gt, gt)
+        err2_wo_gt = p_mpjpe(pred_wo_gt, gt)
+        err1_w_gt = mpjpe(pred_w_gt, gt)
+        err2_w_gt = p_mpjpe(pred_w_gt, gt)
         
-        e1_all[idx] = np.mean(err1)
-        e2_all[idx] = np.mean(err2)
+        e1_all_wo_gt[idx] = np.mean(err1_wo_gt)
+        e2_all_wo_gt[idx] = np.mean(err2_wo_gt)
+        e1_all_w_gt[idx] = np.mean(err1_w_gt)
+        e2_all_w_gt[idx] = np.mean(err2_w_gt)
         oc[idx] += 1
-        final_results_1.append(e1_all[idx])
-        final_results_2.append(e2_all[idx])
+        final_results_1_wo_gt.append(e1_all_wo_gt[idx])
+        final_results_2_wo_gt.append(e2_all_wo_gt[idx])
+        final_results_1_w_gt.append(e1_all_w_gt[idx])
+        final_results_2_w_gt.append(e2_all_w_gt[idx])
     
     summary_table = prettytable.PrettyTable()
     summary_table.field_names = ['test_name']
@@ -168,11 +184,17 @@ def test(args, globalModel, localModel, localProj, transProj, rotProj, val_loade
     summary_table.add_row(['P1'])
     summary_table.add_row(['P2'])
     print(summary_table)
-    e1 = np.mean(np.array(final_results_1)) * 1000
-    e2 = np.mean(np.array(final_results_2)) * 1000
-    print('Protocol #1 Error (MPJPE):', e1, 'mm')
-    print('Protocol #2 Error (P-MPJPE):', e2, 'mm')
+    e1 = np.mean(np.array(final_results_1_wo_gt)) * 1000
+    e2 = np.mean(np.array(final_results_2_wo_gt)) * 1000
+    print('Protocol #1 Error without GT (MPJPE):', e1, 'mm')
+    print('Protocol #2 Error without GT (P-MPJPE):', e2, 'mm')
     print('----------')
+    e1 = np.mean(np.array(final_results_1_w_gt)) * 1000
+    e2 = np.mean(np.array(final_results_2_w_gt)) * 1000
+    print('Protocol #1 Error with GT (MPJPE):', e1, 'mm')
+    print('Protocol #2 Error with GT (P-MPJPE):', e2, 'mm')
+    print('----------')
+    
     return torch.cat(root_all, dim=0), torch.cat(predicted_result_local, dim=0), \
            torch.cat(predicted_result_global, dim=0), torch.cat(gt_result_local, dim=0), video_index
                 
@@ -258,7 +280,14 @@ def main(opts, args):
         test(args, globalModel, localModel, localProj, transProj, 
              rotProj, val_loader, feature_extractor, backbone)
 
-    vis_res_folder = opts.vis_path
+    exp_dir = os.path.join(opts.log_dir, args.experiment_name)
+    vis_res_folder = os.path.join(exp_dir, opts.vis_path)
+    if not os.path.exists(vis_res_folder):
+        os.makedirs(vis_res_folder)
+    print("predicted_result_quat_global: ", predicted_result_global[0,:,3:])
+    print("predicted_result_trans_global: ", predicted_result_global[0,:,0:3])
+    print("GT_result_quat_global: ", root_all[0,:,3:])
+    print("GT_result_trans_global: ", root_all[0,:,0:3])
     # qpos2smpl_vis(predicted_result_local[0,...], predicted_result_global[0,:,3:], predicted_result_global[0,:,0:3], vis_res_folder, 'predicted')
     # qpos2smpl_vis(gt_result_local[0,...], root_all[0,:,3:], root_all[0,:,0:3], vis_res_folder, 'ground_truth')
 

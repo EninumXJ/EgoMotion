@@ -1,0 +1,48 @@
+# General  
+experiment_name: exp12
+dataset: "kinpoly"
+no_eval: False
+finetune: False
+num_joints: 13
+
+# Traning 
+epochs: 6
+checkpoint_frequency: 10
+batch_size: 8 
+dropout: 0.0
+learning_rate: 0.0002
+weight_decay: 0.01
+lr_decay: 0.99
+
+# Model
+num_frames: 16
+dim_feat: 1024
+maxlen: 243
+mlp_ratio: 2
+depth: 5
+dim_model: 256
+rnn_hidden_layers: 4
+num_heads: 8
+att_fuse: True
+
+# Data
+data_root: /data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/
+config: /data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/mocap_meta.yml
+image_tmpl: "{:05d}.jpg"
+rot_represent: "rot6d"
+train_size: 20000
+val_size: 10
+clip_len: 15
+context_length: 40
+if_sample: True
+use_slam: True
+use_depth: False
+gt_2d: False
+
+# Loss
+lambda_quat_error: 1
+lambda_quat_velocvity: 0.0
+lambda_pos_error: 1.0
+lambda_pos_scale: 1.0
+lambda_pos_velocity: 0.5
+lambda_scale: 1.5

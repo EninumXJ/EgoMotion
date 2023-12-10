@@ -147,8 +147,6 @@ def evaluate(args, model, proj, val_loader, feature_extractor=None, backbone=Non
     return torch.cat(root_all, dim=0), torch.cat(predicted_result, dim=0), \
            torch.cat(gt_result, dim=0), video_index
 
-
-
 def test(opts, args):
     img_transforms = torchvision.transforms.Compose([
                     torchvision.transforms.Resize((224,224)),

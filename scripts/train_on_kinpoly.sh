@@ -4,7 +4,9 @@
 #                           -r /home/litianyi/workspace/EgoMotion/checkpoints/exp03/latest_epoch.pth  \
 #                           --use_wandb  \
 
-CUDA_VISIBLE_DEVICES=1,2  python train_on_kinpoly.py  --config config/slam_train_kinpoly.yaml  \
+CUDA_VISIBLE_DEVICES=1,2  python train_on_kinpoly.py   --log_dir /data/newhome/litianyi/logs/EgoMotion/  \
+                                                       --config config/slam_train_kinpoly.yaml  \
+                                                       --projector rnn  \
                                                        --use_wandb  \
-                                                    # --resume  /data/newhome/litianyi/model/EgoMotion/checkpoints/exp05/best_epoch.pth  \
+                                                    #    --resume /data/newhome/litianyi/logs/EgoMotion/exp13/checkpoints/best_epoch.pth  \
                                                     

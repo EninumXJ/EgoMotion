@@ -1,13 +1,13 @@
 # General  
-experiment_name: exp07 
-dataset: "EgoMotion"
+experiment_name: global_exp01 
+dataset: "kinpoly"
 no_eval: False
 finetune: False
 
 # Traning 
 epochs: 50
 checkpoint_frequency: 10
-batch_size: 32 
+batch_size: 8 
 dropout: 0.0
 learning_rate: 0.0002
 weight_decay: 0.01
@@ -23,9 +23,10 @@ num_heads: 8
 att_fuse: True
 
 # Data
-data_root: data/EgoMotion/
-config: data/EgoMotion/meta_remy.yml
-image_tmpl: "{:04d}.jpg"
+data_root: /data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/
+config: /data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/mocap_meta.yml
+image_tmpl: "{:05d}.jpg"
+rot_represent: "rot6d"
 train_size: 10000
 val_size: 3000
 clip_len: 16
@@ -34,13 +35,11 @@ rootrel: True
 sample_stride: 1
 num_joints: 17
 use_slam: True
-use_depth: False
+use_depth: True
 gt_2d: False
 
 # Loss
-lambda_3d_velocity: 0.5
-lambda_scale: 0.5
-lambda_lv: 0.0
-lambda_lg: 0.0
-lambda_a: 0.0
-lambda_av: 0.0
+trans_scale: 1
+trans_v_scale: 0.5
+rot_scale: 1.5
+rot_v_scale: 0.5

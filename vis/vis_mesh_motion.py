@@ -2,7 +2,6 @@ import sys
 sys.path.append('.')
 sys.path.append('..')
 
-
 import torch 
 
 import os 
@@ -364,22 +363,40 @@ def vis_mesh_motion(root_trans, aa_rot_rep, betas, seq_name, motion_path, vis_ob
 if __name__ == "__main__":
     root_trans = torch.zeros(60, 3)
     aa_rot_rep = torch.rand(60, 22, 3)
-    from dataset.kinpoly_dataset import KinPolyDataset
+    from dataset.kinpoly_dataset import KinPolyDataset, NewKinPolyDataset, output2matrix, output2quat
     # from utils.data_utils.process_kinpoly_qpos2smpl import qpos2smpl_vis
     import torchvision
+    import pytorch3d.transforms as transforms 
+    from utils.data_utils.process_kinpoly_qpos2smpl import simpleqpos2smpl
+    from vis.vis_pose_matplot import show3Dpose_animation_smpl22, show3Dpose_animation, plot_single_pose
     img_transforms = torchvision.transforms.Compose([
                     torchvision.transforms.Resize((224,224)),
                     torchvision.transforms.ToTensor()])
-    kinpolydata = KinPolyDataset(dataset_path='/data/newhome/litianyi/dataset/kin_poly/MoCap_dataset',
+    kinpolydata = NewKinPolyDataset(dataset_path='/data/newhome/litianyi/dataset/kin_poly/MoCap_dataset',
                                  config_path='/data/newhome/litianyi/dataset/kin_poly/MoCap_dataset/mocap_meta.yml',
-                                 clip_length=16,
-                                 transform=img_transforms)
-    lrot_gt, img_clip, root, joint_rot = kinpolydata[0]
+                                 clip_length=15, transform=img_transforms, mode='test', use_slam=True,
+                                 rot='rot6d', num_of_keypoints=13)
+    index = 0
+    lrot_gt, img_clip, root, joint_rot, (name, index_in_video) = kinpolydata[index]
     print("lrot_gt shape: ", lrot_gt.shape)
     print("root shape: ", root.shape)
     print("joint rot shape: ", joint_rot.shape)
-    root_trans = root[:, :3]
-    root_quat = root[:, 3:]
+    lrot_gt = lrot_gt.unsqueeze(0)
+    root = root.unsqueeze(0) 
+    joint_rot = joint_rot.unsqueeze(0)
+    with torch.no_grad():
+        root_quat_initial = root[:,0:1,None,3:]  # (N, 1, 1, 4)
+        predicted_joint_mat = transforms.rotation_6d_to_matrix(lrot_gt)  # (N, L, num_joints, 3, 3)
+        predicted_others_rot_diff = predicted_joint_mat[:,:,1:,...]  # (N, T, num_joints-1, 3, 3)
+        predicted_root_rot_diff = transforms.matrix_to_quaternion(predicted_joint_mat[:,:,0:1,...])  # (N, T, 1, 4)
+        predicted_joint_matrix = output2matrix(predicted_others_rot_diff, joint_rot, mode='to-initial')  # (N, T+1, 23, 3, 3)
+        predicted_root_rot = output2quat(predicted_root_rot_diff, root_quat_initial, mode='to-initial')  # (N, T+1, 1, 4)
+        joint_euler_status = transforms.matrix_to_euler_angles(predicted_joint_matrix, convention='ZYX')
+        predicted_3d_pos = simpleqpos2smpl(joint_euler_status, predicted_root_rot, root[:, :, 0:3])
+        pose_to_plot = predicted_3d_pos.cpu().numpy()
+        vis_res_folder_clip = '/home/litianyi/workspace/EgoMotion/logs/exp12/test/vis_results/kinpoly12/demo02'
+        for frame in range(pose_to_plot.shape[1]):
+            plot_single_pose(pose_to_plot[0][frame], frame, vis_res_folder_clip, prefix='predict')
     # vis_res_folder = '/home/litianyi/workspace/EgoMotion/vis/vis_results'
     # root_orient, pose_body = qpos2smpl_vis(joint_rot, root_quat, root_trans, vis_res_folder=vis_res_folder, k_name='kinpoly01')
     # print("pose body shape: ", pose_body.shape)
@@ -390,7 +407,7 @@ if __name__ == "__main__":
     # seq_name = "debug_vis"
     # motion_path = "./debug_vis_code_kinpoly.html"
     # vis_mesh_motion(root_trans, aa_rot_rep, betas, seq_name, motion_path, vis_object=False)
-    pose = torch.ones(16, 8, 23, 3)
-    root_aa = torch.ones(16, 8, 4)
-    trans = torch.ones(16, 8, 3)
-    bodypose = qpos2smpl(pose, root_aa, trans)
+    # pose = torch.ones(16, 8, 23, 3)
+    # root_aa = torch.ones(16, 8, 4)
+    # trans = torch.ones(16, 8, 3)
+    # bodypose = qpos2smpl(pose, root_aa, trans)
